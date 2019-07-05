@@ -210,7 +210,6 @@ def shard_id_key_count(shard_id):
         )
         return Response(forw.content, forw.status_code)
 
-
 # add a node to a shard
 @app.route('/key-value-store-shard/add-member/<shard_id>', methods=['PUT'])
 def add_member(shard_id):
@@ -259,6 +258,84 @@ def add_member(shard_id):
         except (requests.Timeout, requests.exceptions.RequestException) as e:
             print('Error in shard add member (new node dead)')
 
+@app.route('/key-value-store-shard/reshard', methods=['PUT'])
+def reshard_keys():
+    result = request.get_json(force=True) 
+    reshard_number = int(result['shard-count']) 
+    # check if there's sufficient replica to do the requested number of shards
+    # there has to be at least two replicas in a shard
+    if len(running_ip)  < reshard_number * 2:
+        return bad_request('SHARD')
+    elif reshard_number == shard_count:
+        resp = jsonify(message='Client, this is not a new shard count : ) Shy shy shy Fancy woo') 
+        resp.status_code = 200
+        return resp 
+    
+    # run the reshard process concurrently in the background task queue
+    executor.submit(reshard, reshard_number) 
+
+    # return response cuz the client is waitingggg
+    time.sleep(2)
+    resp = jsonify(message='Resharding done successfully')
+    resp.status_code = 200
+    return resp
+
+# the function for overriding a node's kvs, shard id, and shard count knowledge 
+@app.route('/key-value-store-shard/reshard_history', methods=['PUT'])
+def reshard_keys_from_replica():
+    global history 
+    global my_shard
+    global shard_count
+    print("herroooo1")
+    request_source = request.remote_addr + ":8080"
+    # security check, if this request is not from another node, it can be dangerous 
+    if request_source not in running_ip:
+        return bad_request('NO') 
+    
+    print("herroooo2")
+    # get a bunch of data
+    result = request.get_json(force=True)
+    new_history = result['new_history']
+    new_id = result['new_id']
+    new_count = result['new_count']
+    # override these data 
+    history = new_history
+    my_shard = int(new_id)
+    shard_count = int(new_count)
+    resp = jsonify(message="Successfully")
+    resp.status_code = 201
+    return resp
+
+# ----------------------------- Helper Functions for Sharding --------------------------------
+def return_shard_ids():
+    global shard_count
+    shards = []
+    for i in range(1, (shard_count+1)):
+        shards.append(i)
+    shard_ids = ','.join([str(shard) for shard in shards])
+    message = jsonify(**{'message':'Shard IDs retrieved successfully', 'shard-ids':shard_ids})
+    resp = make_response(message, 200)
+    return resp
+
+def return_node_shard_id():
+    global my_shard
+    shard_id = str(my_shard)
+    message = jsonify(**{'message':'Shard ID of the node retrieved successfully', 'shard-id':shard_id})
+    resp = make_response(message, 200)
+    return resp
+
+def return_shard_members(members):
+    shard_id_members = ','.join(members)
+    message = jsonify(**{'message':'Members of shard ID retrieved successfully', 'shard-id-members':shard_id_members})
+    resp = make_response(message, 200)
+    return resp
+
+def return_key_count(count):
+    key_count = str(count)
+    message = jsonify(**{'message':'Key count of shard ID retrieved successfully', 'shard-id-key-count':key_count})
+    resp = make_response(message, 200)
+    return resp
+
 def return_add_member(shard_id):
     global history
 
@@ -292,8 +369,6 @@ def return_add_member(shard_id):
     message = jsonify(message='Add member successfully')
     resp = make_response(message, 200)
     return resp
-
-
 
 # function for resharding 
 def reshard(reshard_number):
@@ -380,92 +455,8 @@ def reshard(reshard_number):
             shard_count = reshard_number
             history = data[ip_new_shard_id] 
 
-    
     return 'success'
 
-            
-
-
-@app.route('/key-value-store-shard/reshard', methods=['PUT'])
-def reshard_keys():
-    result = request.get_json(force=True) 
-    reshard_number = int(result['shard-count']) 
-    # check if there's sufficient replica to do the requested number of shards
-    # there has to be at least two replicas in a shard
-    if len(running_ip)  < reshard_number * 2:
-        return bad_request('SHARD')
-    elif reshard_number == shard_count:
-        resp = jsonify(message='Client, this is not a new shard count : ) Shy shy shy Fancy woo') 
-        resp.status_code = 200
-        return resp 
-    
-    # run the reshard process concurrently in the background task queue
-    executor.submit(reshard, reshard_number) 
-
-    # return response cuz the client is waitingggg
-    time.sleep(2)
-    resp = jsonify(message='Resharding done successfully')
-    resp.status_code = 200
-    return resp
-
-# the function for overriding a node's kvs, shard id, and shard count knowledge 
-@app.route('/key-value-store-shard/reshard_history', methods=['PUT'])
-def reshard_keys_from_replica():
-    global history 
-    global my_shard
-    global shard_count
-    print("herroooo1")
-    request_source = request.remote_addr + ":8080"
-    # security check, if this request is not from another node, it can be dangerous 
-    if request_source not in running_ip:
-        return bad_request('NO') 
-    
-    print("herroooo2")
-    # get a bunch of data
-    result = request.get_json(force=True)
-    new_history = result['new_history']
-    new_id = result['new_id']
-    new_count = result['new_count']
-    # override these data 
-    history = new_history
-    my_shard = int(new_id)
-    shard_count = int(new_count)
-    resp = jsonify(message="Successfully")
-    resp.status_code = 201
-    return resp
-
-
-
-
-# -------------------------- SHARD Helper Functions -------------------------------
-def return_shard_ids():
-    global shard_count
-    shards = []
-    for i in range(1, (shard_count+1)):
-        shards.append(i)
-    shard_ids = ','.join([str(shard) for shard in shards])
-    message = jsonify(**{'message':'Shard IDs retrieved successfully', 'shard-ids':shard_ids})
-    resp = make_response(message, 200)
-    return resp
-
-def return_node_shard_id():
-    global my_shard
-    shard_id = str(my_shard)
-    message = jsonify(**{'message':'Shard ID of the node retrieved successfully', 'shard-id':shard_id})
-    resp = make_response(message, 200)
-    return resp
-
-def return_shard_members(members):
-    shard_id_members = ','.join(members)
-    message = jsonify(**{'message':'Members of shard ID retrieved successfully', 'shard-id-members':shard_id_members})
-    resp = make_response(message, 200)
-    return resp
-
-def return_key_count(count):
-    key_count = str(count)
-    message = jsonify(**{'message':'Key count of shard ID retrieved successfully', 'shard-id-key-count':key_count})
-    resp = make_response(message, 200)
-    return resp
 
 # -------------------------- KVS OPERATIONS -----------------------------------------
 # The MAIN endpoint for key value store operation
@@ -514,9 +505,6 @@ def api_kvs(key):
 
         # if this is the "correct" shard, do request normal
         if new_shard_id == int(my_shard):
-            print("we have the same shard!")
-            print("newshard", new_shard_id)
-            print("myshard", my_shard)
             # When the dependencies are not satisfied, wait
             # Flask can process request concurrently by default
             # while not all(item in [ itemm[0] for itemm in history ] for item in cm_list):
@@ -556,18 +544,11 @@ def api_kvs(key):
             # if request id forwarded from another node
             elif 'from-shard' in result:
                 return put_op_from_client(request, key, result, cm, new_shard_id)
-                # print("this is from other node")
-                # if result['from-shard'] is not str(my_shard):
-                    # return put_op_from_client(request, key, result, cm, new_shard_id)
-            # if request is broadcasted from another node
-                # else:
-                #     return op_from_replica(request, key, result, cm)
             else:
                 return op_from_replica(request, key, result, cm)
 
         # else, forward the request to the "correct" shard member
         else:
-            print("we have different shard!")
             forwarding_ip = kvs_first_member(new_shard_id)
             forwarding_data = {'value': value, 'causal-metadata': cm, 'from-shard': 1}
             forw = requests.request(
@@ -576,7 +557,6 @@ def api_kvs(key):
                 json = forwarding_data
             )
             return Response(forw.content, forw.status_code)
-
 
     # GET request return the corresponding value of the key
     if request.method == 'GET':
@@ -607,6 +587,7 @@ def api_kvs(key):
         else:
             return bad_request('GET')
 
+    # DELETE request delete the corresponding key-value pair
     if request.method == 'DELETE':
         # get request ip, to check if it's from client
         request_source = request.remote_addr + ":8080"
@@ -617,23 +598,39 @@ def api_kvs(key):
         cm_list = cm.split(',') if cm != '' else ''
         # ---------------------------get the data passed in-----------------------------
 
-        while not all(item in [ item[0] for item in history ] for item in cm_list):
-            time.sleep(1)
+        # while not all(item in [ item[0] for item in history ] for item in cm_list):
+        #     time.sleep(1)
 
-        value = None
-        # loop through history to find the latest value of the key
-        for item in history:
-            if item[1] == key:
-                value = item[2]
+        # if this is the "correct" shard, do request normal
+        if new_shard_id == int(my_shard):
+            # loop through history to find the latest value of the key
+            for item in history:
+                if item[1] == key:
+                    value = item[2]
 
-        # if the last item that correspond to the key is not None
-        if value != None:
-            if request_source not in running_ip:
-                return delete_op_from_client(request, key, result, cm)
-            else:
-                return op_from_replica(request, key, result, cm)
+            # if the last item that correspond to the key is not None
+            if value != None:
+                # if the request is from client
+                if request_source not in running_ip:
+                    return delete_op_from_client(request, key, result, cm, new_shard_id)
+                # if the request is forwarded from another node
+                elif 'from-shard' in result:
+                    return delete_op_from_client(request, key, result, cm, new_shard_id)
+                else:
+                    return op_from_replica(request, key, result, cm)
+            return bad_request('DELETE')
 
-        return bad_request('DELETE')
+        # else, forward the request to the "correct" shard member
+        else:
+            forwarding_ip = kvs_first_member(new_shard_id)
+            forwarding_data = {'causal-metadata': cm, 'from-shard': 1}
+            forw = requests.request(
+                method = request.method,
+                url = request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'),
+                json = forwarding_data
+            )
+            return Response(forw.content, forw.status_code)
+
 
 # -------------------------- KVS HELPER FUNCTIONS -----------------------------------------
 
@@ -660,7 +657,7 @@ def put_op_from_client(request, key, result, cm, shard_id):
 
 # function for deleting key operation from client
 # return response
-def delete_op_from_client(request, key, result, cm):
+def delete_op_from_client(request, key, result, cm, shard_id):
     print("I'm gonna broadcast!!")
     value = None
     version = generate_version()
@@ -668,7 +665,8 @@ def delete_op_from_client(request, key, result, cm):
     executor.submit(broadcast_request, request, forwarding_data)
     # expand the causal metadata containing coresponding key to the version
     updated_cm = key + '-' + version if cm is '' else (cm + ',' + key + '-' + version)
-    resp = jsonify(**{'message':'Deleted successfully', 'version':version, 'causal-metadata':updated_cm})
+    shard_id = str(shard_id)
+    resp = jsonify(**{'message':'Deleted successfully', 'version':version, 'causal-metadata':updated_cm, 'shard-id': shard_id})
     resp.status_code = 200
     add_element_to_history( version, key, value, updated_cm )
     return resp

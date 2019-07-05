@@ -4,7 +4,7 @@ import time
 import os
 
 ######################## initialize variables ################################################
-subnetName = "assignment3-net"
+subnetName = "my-net"
 subnetAddress = "10.10.0.0/16"
 
 replica1Ip = "10.10.0.2"
@@ -65,10 +65,7 @@ class TestHW3(unittest.TestCase):
     # build docker image
     buildDockerImage()
 
-
-
-
-    # ######################### Run tests #######################################################
+    ######################### Run tests #######################################################
     def test_a_view_operations(self):
 
         # stop and remove containers from possible previous runs
@@ -380,7 +377,7 @@ class TestHW3(unittest.TestCase):
         self.assertEqual(third_get_causal_metadata, put_causal_metadata)
 
     
-    # ########################## Run tests #######################################################
+    ########################## Run tests #######################################################
     def test_f_delete_operations(self):
 
         # stop and remove containers from possible previous runs
