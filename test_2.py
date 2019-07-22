@@ -65,6 +65,7 @@ class TestHW3(unittest.TestCase):
     shardIdList = []
     shardsMemberList = []
     keyCount = 100
+    newShardIdList = [] 
 
     ######################## Build docker image and create subnet ################################
     print("###################### Building Docker Image ######################\n")
@@ -357,6 +358,7 @@ class TestHW3(unittest.TestCase):
         response = requests.get( 'http://localhost:8082/key-value-store-shard/shard-ids')
         responseInJson = response.json()
         self.assertEqual(response.status_code, 200)
+        global newShardIdList
         newShardIds = responseInJson['shard-ids']
         newShardIdList = newShardIds.split(",")
         self.assertEqual(len(newShardIdList), 3)
@@ -453,7 +455,7 @@ class TestHW3(unittest.TestCase):
             value = responseInJson["value"]
             self.assertEqual(value, "value" + str(counter))
     
-    def test_f_delete_key_value_operation(self):
+    def test_j_delete_key_value_operation(self):
         print("\n###################### Deleting keys/values from the store ######################\n")
 
         nextCausalMetadata = ""
@@ -469,7 +471,7 @@ class TestHW3(unittest.TestCase):
 
             keyShardId = responseInJson["shard-id"]
 
-            self.assertTrue(keyShardId in self.shardIdList)
+            self.assertTrue(keyShardId in newShardIdList)
 
             time.sleep(1)
 
