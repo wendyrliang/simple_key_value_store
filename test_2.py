@@ -246,25 +246,7 @@ class TestHW3(unittest.TestCase):
             value = responseInJson["value"]
             self.assertEqual(value, "value" + str(counter))
     
-    def test_f_delete_key_value_operation(self):
-        print("\n###################### Deleting keys/values from the store ######################\n")
-
-        nextCausalMetadata = ""
-
-        for counter in range(self.keyCount):
-            nodeIndex = counter % len(nodeIpList)
-
-            # put a new key in the store
-            response = requests.delete('http://localhost:' + nodeHostPortList[nodeIndex] + '/key-value-store/key' + str(counter), json={'value': "value" + str(counter), "causal-metadata": nextCausalMetadata})
-            responseInJson = response.json()
-            self.assertEqual(response.status_code, 200)
-            nextCausalMetadata = responseInJson["causal-metadata"]
-
-            keyShardId = responseInJson["shard-id"]
-
-            self.assertTrue(keyShardId in self.shardIdList)
-
-            time.sleep(1)
+    
 
     def test_f_shard_key_count(self):
 
@@ -470,6 +452,26 @@ class TestHW3(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             value = responseInJson["value"]
             self.assertEqual(value, "value" + str(counter))
+    
+    def test_f_delete_key_value_operation(self):
+        print("\n###################### Deleting keys/values from the store ######################\n")
+
+        nextCausalMetadata = ""
+
+        for counter in range(self.keyCount):
+            nodeIndex = counter % len(nodeIpList)
+
+            # put a new key in the store
+            response = requests.delete('http://localhost:' + nodeHostPortList[nodeIndex] + '/key-value-store/key' + str(counter), json={'value': "value" + str(counter), "causal-metadata": nextCausalMetadata})
+            responseInJson = response.json()
+            self.assertEqual(response.status_code, 200)
+            nextCausalMetadata = responseInJson["causal-metadata"]
+
+            keyShardId = responseInJson["shard-id"]
+
+            self.assertTrue(keyShardId in self.shardIdList)
+
+            time.sleep(1)
 
 if __name__ == '__main__':
     unittest.main()
