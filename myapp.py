@@ -21,6 +21,8 @@ pending_request = []
 counter = 0
 shard_count = 0 # store external shard_count
 my_shard = 0 # store self shard id
+ping_leader = ""
+ping_watcher = ""
 
 
 # ------------------------ Error Handlers --------------------------
@@ -64,7 +66,7 @@ def check_view_list():
     # check if SHARD_COUNT is provided
     if os.environ.get('SHARD_COUNT') is not None:
         shard_count = int(os.environ.get('SHARD_COUNT'))
-        if shard_count*2 <= len(running_ip):
+        if shard_count * 2 <= len(running_ip):
             # assign shard id to node using position mod shard_count
             my_shard = ((running_ip.index(this_ip) + 1) % shard_count) + 1
 
@@ -73,16 +75,14 @@ def check_view_list():
     # do a PUT broadcast to every other running ip in it's view
     def view_put_broadcast():
         for ip in running_ip:
-            if ip != this_ip:
+            if ip is not this_ip:
                 try:
                     socket_add = {'socket-address': this_ip}
                     resp = requests.request(
                         method='PUT',
                         url='http://' + str(ip) + '/key-value-store-view',
                         json=socket_add
-                    )
-                    response = Response(resp.content, resp.status_code)
-                    
+                    )  
                 except (requests.Timeout, requests.exceptions.RequestException) as e:
                     print("cannot send put view request to a bad ip")
                     
@@ -96,10 +96,7 @@ def check_view_list():
         random_ip = None
 
         # do not retrive history if shard id is unkown
-        if my_shard == 0:
-            print('Do not retrive history')
-
-        else:
+        if my_shard!=0:
             for ip in running_ip:
                 if ip is not this_ip:
                     try:
@@ -116,7 +113,6 @@ def check_view_list():
                 history = resp.json().get('history')
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 pass
-
     return app
 
 app = check_view_list()
@@ -145,7 +141,7 @@ def shard_members(shard_id):
 
     # check shard_id of all nodes
     for ip in running_ip:
-        if ip is not this_ip:
+        if ip is this_ip:
             try:
                 resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
                 result = int(resp.json().get('shard-id'))
@@ -153,7 +149,7 @@ def shard_members(shard_id):
                 pass
             if result == shard_id:
                 members.append(ip)
-        elif ip is this_ip:
+        else:
             if my_shard == shard_id:
                 members.append(ip)
 
@@ -179,7 +175,7 @@ def shard_id_key_count(shard_id):
 
     else:
         for ip in running_ip:
-            if ip is not this_ip:
+            if ip is this_ip:
                 try:
                     resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
                     result = int(resp.json().get('shard-id'))
@@ -205,7 +201,7 @@ def add_member(shard_id):
     new_add = result['socket-address']
 
     # check if we are in new node
-    if new_add == this_ip:
+    if new_add is this_ip:
         # assign shard id
         my_shard = shard_id
         # get shard count data from a random ip
@@ -351,7 +347,7 @@ def reshard(reshard_number):
     all_ids = [my_shard] 
     # search through all the nodes
     for ip in running_ip:
-        if this_ip != ip:
+        if this_ip is not ip:
             # get the shard id of this ip 
             try: 
                 resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
@@ -696,24 +692,8 @@ def broadcast_request(request, forwarding_data, members):
                     timeout=5
                 )
                 response = Response(resp.content, resp.status_code)
-
-
-            # delete not responding replicas
             except (requests.Timeout) as e:
-                running_ip.remove(ip)
-                # def view_delete_broadcast():
-                for ipp in running_ip:
-                    if ipp!=ip and ipp!=this_ip:
-                        socket_delete = {'socket-address': str(ip)}
-                        resp = requests.request(
-                            method='DELETE',
-                            url='http://' + str(ipp) + '/key-value-store-view',
-                            json=socket_delete
-                        )
-                        response = Response(resp.content, resp.status_code)
-                        return response.status_code
-                thread = threading.Thread(target=view_delete_broadcast)
-                thread.start()
+                pass 
 
 # -------------------------- END OF KVS HELPER FUNCTIONS -----------------------------------------
 
@@ -723,6 +703,7 @@ def broadcast_request(request, forwarding_data, members):
 def view():
     # GET request retrieve the view from another replica
     if request.method == 'GET':
+        if request.request_source
         return view_get_method()
 
     # DELETE reqeust delete a replica from the view
@@ -739,6 +720,7 @@ def view():
 
 # Helper function for GET
 def view_get_method():
+    
     view = ','.join(running_ip)
     message = jsonify(message='View retrieved successfully', view=view)
     resp = make_response(message, 200)
@@ -779,8 +761,26 @@ def get_kvs():
     resp = jsonify(message='Retreive key value store', history=history)
     resp.status_code = 200
     return resp
-# --------------------------------- END of Retrive Data for New Replica ----------------------------------
 
+@app.route('/ping', methods=['GET'])
+def ping():
+    return Response(status_code=200) 
+
+
+# --------------------------------- END of Retrive Data for New Replica ----------------------------------
+@app.before_first_request 
+def ping_all_nodes() -> None:
+    while True:
+        for ip in running_ip:
+            if ip==this_ip:
+                continue
+            try:
+                resp = requests.get('http://' + str(ip) + '/ping')
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                running_ip.remove(ip)
+        
+        time.sleep(5)
 
 if __name__ == '__main__':
+    ping_all_nodes()
     app.run(debug=True, host='0.0.0.0', port=8080, threaded=True)
