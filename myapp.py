@@ -16,7 +16,7 @@ app = Flask(__name__)
 # ---------------------- Declare Variables ----------------------
 running_ip =[] # store view of this replica
 this_ip = None  # store self socket address
-history = []  # EX: ("10.10.0.3:8080:1", "mykey", "myval", "")
+history = []  # EX: (key?10.10.0.3:1, mykey, myval, causal-metadata)
 pending_request = []
 counter = 0
 shard_count = 0 # store external shard_count
@@ -482,70 +482,43 @@ def api_kvs(key):
         # ---------------------------get the data passed in-----------------------------
         result = request.get_json(force=True)
         value = result['value']
-        cm = result['causal-metadata']
-        cm_list = cm.split(',') if cm != '' else ''
-        # ---------------------------get the data passed in-----------------------------
-
-        # --------------checking and forwarding for shard-id is here-----------------------
-        #
-        # if shard-id's match, then do nothing and apply the operation,
-        # reply back to client, and have other member nodes of shard-id
-        # replicate the operation
-
-        # else if shard-id's do not match, then forward the request to a
-        # member of shard-id. The member receiving the forwarded request
-        # recomputes shard-id of key to make sure that the request has
-        # been correctly forwarded.
-        #
-        # If yes, then apply operation and respond to forwarding node,
-        # which then replies back to client, then replicate the operation
-        # among other members of shard-id
-        #
-        # if not, then something is definitely wrong
+        cm = result['causal-metadata'] # EX: "key1?10.10.0.2:1,key2?10.10.0.2:2"
+        cm_list = cm.split(',') if cm != '' else [] # EX: [key1?10.10.0.2:1, key2?10.10.0.2:2]
 
         # if this is the "correct" shard, do request normal
         if new_shard_id == int(my_shard):
             # When the dependencies are not satisfied, wait
             # Flask can process request concurrently by default
-            # while not all(item in [ itemm[0] for itemm in history ] for item in cm_list):
-            #     time.sleep(1)
-            # print('check for causal consistency')
-            # for item in cm_list:
-            #     cm_key = item.split('-')[0] # get key in causal_metadata
-            #     cm_version = item.split('-')[1] # get version in causal_metadata
-            #     cm_shard = hash_a_string(cm_key) % shard_count + 1 # compute the shard of given key in the causal_metadata
-            #     # if the request is done in this shard, check local history
-            #     if cm_shard == my_shard:
-            #         past_versions = [element[0] for element in history]
-            #         while cm_version not in past_versions:
-            #             time.sleep(1)
-            #     # if the request is donw in other shard, check history of one other node in that shard
-            #     else:
-            #         forwarding_ip = kvs_first_member(cm_shard)
-            #         resp = requests.request(
-            #                 method = 'GET',
-            #                 url = 'http://' + str(forwarding_ip) + '/history'
-            #             )
-            #         forward_history = resp.json().get('history')
-            #         past_versions = [element[0] for element in forward_history]
-            #         while cm_version not in past_versions:
-            #             time.sleep(1)
-            #             resp = requests.request(
-            #                 method = 'GET',
-            #                 url = 'http://' + str(forwarding_ip) + '/history'
-            #             )
-            #             forward_history = resp.json().get('history')
-            #             past_versions = [element[0] for element in forward_history]
+            # Need to check for causal consistency if there are causal-metadata passed in
+            if len(cm_list) > 0:
+                # loop through causal metadata
+                for item in cm_list:
+                    cm_key = item.split('?')[0] # get key in every causal metadata
+                    cm_version = item.split('?')[1] # get version in every causal metadata
+                    cm_shard = hash_a_string(cm_key) % shard_count + 1 # calculate the shard id which the causal metadata is stored
+                    # if the causal metadata should be stored in this shard
+                    if cm_shard == my_shard:
+                        # halt until this causal metadata is in history
+                        while item not in [his[0] for his in history]:
+                            time.sleep(1)
+                    # else, need to check the "correct" shard id
+                    else:
+                        forwarding_ip = kvs_first_member(cm_shard)
+                        resp = requests.request(
+                            method = 'GET',
+                            url = 'http://' + str(forwarding_ip) + '/history-check',
+                            json = str(item)
+                        )
                         
             # if request from client
             if request_source not in running_ip:
                 print("this is from client")
-                return put_op_from_client(request, key, result, cm, new_shard_id)
+                return put_op_from_client(request, key, value, cm, new_shard_id)
             # if request id forwarded from another node
             elif 'from-shard' in result:
-                return put_op_from_client(request, key, result, cm, new_shard_id)
+                return put_op_from_client(request, key, value, cm, new_shard_id)
             else:
-                return op_from_replica(request, key, result, cm)
+                return op_from_replica(request, key, value, cm)
 
         # else, forward the request to the "correct" shard member
         else:
@@ -636,15 +609,15 @@ def api_kvs(key):
 
 # function for deleting put operation from client
 # return response
-def put_op_from_client(request, key, result, cm, shard_id):
+def put_op_from_client(request, key, value, cm, shard_id):
     global my_shard
     print("I'm gonna broadcast!!")
-    value = result['value']
     version = generate_version()
+    version = key + '?' + version
     forwarding_data = {'version': version, 'causal-metadata': cm, 'value': value}
     executor.submit(broadcast_request, request, forwarding_data, kvs_shard_members(shard_id))
     # expand the causal metadata containing coresponding key to the version
-    updated_cm = key + ':' + version if cm is '' else (cm + ',' + key + ':' + version)
+    updated_cm = version if cm is '' else cm + ',' + version
     shard_id = str(shard_id)
     if key in [ item[1] for item in history ]:
         resp = jsonify(**{'message':'Updated successfully', 'version':version, 'causal-metadata':updated_cm, 'shard-id':shard_id})
@@ -842,6 +815,15 @@ def hash_a_string(st):
 @app.route('/history', methods=['GET'])
 def get_kvs():
     resp = jsonify(message='Retreive key value store', history=history)
+    resp.status_code = 200
+    return resp
+
+# --------------------------------- Help Other Shard To Check Causal Consistency -----------------
+@app.route('/history-check', methods=['GET'])
+def history_check(cm):
+    while cm not in [item[0] for item in history]:
+        time.sleep(1)
+    resp = jsonify(message='Causal metadata is in history')
     resp.status_code = 200
     return resp
 # --------------------------------- END of Retrive Data for New Replica ----------------------------------
