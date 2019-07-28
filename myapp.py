@@ -483,14 +483,14 @@ def api_kvs(key):
         result = request.get_json(force=True)
         value = result['value']
         cm = result['causal-metadata'] # EX: "key1?10.10.0.2:1,key2?10.10.0.2:2"
-        cm_list = cm.split(',') if cm != '' else [] # EX: [key1?10.10.0.2:1, key2?10.10.0.2:2]
 
         # if this is the "correct" shard, do request normal
         if new_shard_id == int(my_shard):
             # When the dependencies are not satisfied, wait
             # Flask can process request concurrently by default
             # Need to check for causal consistency if there are causal-metadata passed in
-            if len(cm_list) > 0:
+            if cm != "":
+                cm_list = cm.split(',') # EX: [key1?10.10.0.2:1, key2?10.10.0.2:2]
                 # loop through causal metadata
                 for item in cm_list:
                     cm_key = item.split('?')[0] # get key in every causal metadata
@@ -531,7 +531,7 @@ def api_kvs(key):
         # else, forward the request to the "correct" shard member
         else:
             forwarding_ip = kvs_first_member(new_shard_id)
-            forwarding_data = {'value': value, 'causal-metadata': cm, 'from-shard': 1}
+            forwarding_data = {'value': value, 'causal-matadata': cm, 'from-shard': 1}
             forw = requests.request(
                 method = request.method,
                 url = request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'),
