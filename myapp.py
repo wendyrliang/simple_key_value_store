@@ -506,9 +506,17 @@ def api_kvs(key):
                         forwarding_ip = kvs_first_member(cm_shard)
                         resp = requests.request(
                             method = 'GET',
-                            url = 'http://' + str(forwarding_ip) + '/history-check',
-                            json = str(item)
+                            url = 'http://' + str(forwarding_ip) + '/history'
                         )
+                        forward_history = resp.json().get('history')
+                        while item not in [his[0] for his in forward_history]:
+                            time.sleep(1)
+                            forwarding_ip = kvs_first_member(cm_shard)
+                            resp = requests.request(
+                                method = 'GET',
+                                url = 'http://' + str(forwarding_ip) + '/history'
+                            )
+                            forward_history = resp.json().get('history')
                         
             # if request from client
             if request_source not in running_ip:
@@ -518,7 +526,7 @@ def api_kvs(key):
             elif 'from-shard' in result:
                 return put_op_from_client(request, key, value, cm, new_shard_id)
             else:
-                return op_from_replica(request, key, value, cm)
+                return op_from_replica(request, key, result)
 
         # else, forward the request to the "correct" shard member
         else:
@@ -561,48 +569,48 @@ def api_kvs(key):
             return bad_request('GET')
 
     # DELETE request delete the corresponding key-value pair
-    if request.method == 'DELETE':
-        # get request ip, to check if it's from client
-        request_source = request.remote_addr + ":8080"
-        # ---------------------------get the data passed in-----------------------------
-        result = request.get_json(force=True)
-        value = None
-        cm = result['causal-metadata']
-        cm_list = cm.split(',') if cm != '' else ''
-        # ---------------------------get the data passed in-----------------------------
+    # if request.method == 'DELETE':
+    #     # get request ip, to check if it's from client
+    #     request_source = request.remote_addr + ":8080"
+    #     # ---------------------------get the data passed in-----------------------------
+    #     result = request.get_json(force=True)
+    #     value = None
+    #     cm = result['causal-metadata']
+    #     cm_list = cm.split(',') if cm != '' else ''
+    #     # ---------------------------get the data passed in-----------------------------
 
-        # while not all(item in [ item[0] for item in history ] for item in cm_list):
-        #     time.sleep(1)
+    #     # while not all(item in [ item[0] for item in history ] for item in cm_list):
+    #     #     time.sleep(1)
 
-        # if this is the "correct" shard, do request normal
-        if new_shard_id == int(my_shard):
-            # loop through history to find the latest value of the key
-            for item in history:
-                if item[1] == key:
-                    value = item[2]
+    #     # if this is the "correct" shard, do request normal
+    #     if new_shard_id == int(my_shard):
+    #         # loop through history to find the latest value of the key
+    #         for item in history:
+    #             if item[1] == key:
+    #                 value = item[2]
 
-            # if the last item that correspond to the key is not None
-            if value != None:
-                # if the request is from client
-                if request_source not in running_ip:
-                    return delete_op_from_client(request, key, result, cm, new_shard_id)
-                # if the request is forwarded from another node
-                elif 'from-shard' in result:
-                    return delete_op_from_client(request, key, result, cm, new_shard_id)
-                else:
-                    return op_from_replica(request, key, result, cm)
-            return bad_request('DELETE')
+    #         # if the last item that correspond to the key is not None
+    #         if value != None:
+    #             # if the request is from client
+    #             if request_source not in running_ip:
+    #                 return delete_op_from_client(request, key, result, cm, new_shard_id)
+    #             # if the request is forwarded from another node
+    #             elif 'from-shard' in result:
+    #                 return delete_op_from_client(request, key, result, cm, new_shard_id)
+    #             else:
+    #                 return op_from_replica(request, key, result, cm)
+    #         return bad_request('DELETE')
 
-        # else, forward the request to the "correct" shard member
-        else:
-            forwarding_ip = kvs_first_member(new_shard_id)
-            forwarding_data = {'causal-metadata': cm, 'from-shard': 1}
-            forw = requests.request(
-                method = request.method,
-                url = request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'),
-                json = forwarding_data
-            )
-            return Response(forw.content, forw.status_code)
+    #     # else, forward the request to the "correct" shard member
+    #     else:
+    #         forwarding_ip = kvs_first_member(new_shard_id)
+    #         forwarding_data = {'causal-metadata': cm, 'from-shard': 1}
+    #         forw = requests.request(
+    #             method = request.method,
+    #             url = request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'),
+    #             json = forwarding_data
+    #         )
+    #         return Response(forw.content, forw.status_code)
 
 
 # -------------------------- KVS HELPER FUNCTIONS -----------------------------------------
@@ -630,31 +638,33 @@ def put_op_from_client(request, key, value, cm, shard_id):
 
 # function for deleting key operation from client
 # return response
-def delete_op_from_client(request, key, result, cm, shard_id):
-    print("I'm gonna broadcast!!")
-    value = None
-    version = generate_version()
-    forwarding_data = {'version': version, 'causal-metadata': cm, 'value': value }
-    executor.submit(broadcast_request, request, forwarding_data)
-    # expand the causal metadata containing coresponding key to the version
-    updated_cm = key + '-' + version if cm is '' else (cm + ',' + key + '-' + version)
-    shard_id = str(shard_id)
-    resp = jsonify(**{'message':'Deleted successfully', 'version':version, 'causal-metadata':updated_cm, 'shard-id': shard_id})
-    resp.status_code = 200
-    add_element_to_history( version, key, value, updated_cm )
-    return resp
+# def delete_op_from_client(request, key, result, cm, shard_id):
+#     print("I'm gonna broadcast!!")
+#     value = None
+#     version = generate_version()
+#     forwarding_data = {'version': version, 'causal-metadata': cm, 'value': value }
+#     executor.submit(broadcast_request, request, forwarding_data)
+#     # expand the causal metadata containing coresponding key to the version
+#     updated_cm = key + '-' + version if cm is '' else (cm + ',' + key + '-' + version)
+#     shard_id = str(shard_id)
+#     resp = jsonify(**{'message':'Deleted successfully', 'version':version, 'causal-metadata':updated_cm, 'shard-id': shard_id})
+#     resp.status_code = 200
+#     add_element_to_history( version, key, value, updated_cm )
+#     return resp
 
-# function for put/delete operation from replica
-# return response
-def op_from_replica(request, key, result, cm):
-    value = result['value']
-    print("this is from another replica, do not broadcast")
-    version = result['version'] # EX: "10.10.0.3:2"
-    updated_cm = key + '-' + version if cm is '' else (cm + ',' + key + '-' + version)
-    resp = jsonify(message="Replicated successfully", version=version)
-    resp.status_code = 201
-    add_element_to_history( version, key, value, updated_cm )
-    return resp
+    # function for put/delete operation from replica
+    # return response
+    # result = {'version': version, 'causal-metadata': cm, 'value': value}
+    def op_from_replica(request, key, result):
+        print("this is from another replica, do not broadcast")
+        version = result['version'] # EX: "key?10.10.0.3:2"
+        cm = result['causal-metadata']
+        value = result['value']
+        updated_cm = versiont if cm is '' else cm + version
+        resp = jsonify(message="Replicated successfully", version=version)
+        resp.status_code = 201
+        add_element_to_history(version, key, value, updated_cm)
+        return resp
 
 # generate a new version based on current counter + this ip
 # return a unique version across replicas ex: "10.10.0.3:8080:0"
@@ -726,7 +736,6 @@ def broadcast_request(request, forwarding_data, members):
     for ip in members:
         if ip != this_ip:
             try:
-
                 resp = requests.request(
                     method=request.method,
                     url=request.url.replace(request.host_url, 'http://' + str(ip) + '/' ),
@@ -734,7 +743,6 @@ def broadcast_request(request, forwarding_data, members):
                     timeout=5
                 )
                 response = Response(resp.content, resp.status_code)
-
 
             # delete not responding replicas
             except (requests.Timeout) as e:
@@ -818,14 +826,6 @@ def get_kvs():
     resp.status_code = 200
     return resp
 
-# --------------------------------- Help Other Shard To Check Causal Consistency -----------------
-@app.route('/history-check', methods=['GET'])
-def history_check(cm):
-    while cm not in [item[0] for item in history]:
-        time.sleep(1)
-    resp = jsonify(message='Causal metadata is in history')
-    resp.status_code = 200
-    return resp
 # --------------------------------- END of Retrive Data for New Replica ----------------------------------
 
 

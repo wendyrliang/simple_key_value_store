@@ -1,0 +1,1 @@
+curl --request GET --header "Content-Type: application/json" --write-out "%{http_code}\n" http://localhost:8084/key-value-store/key1
