@@ -16,13 +16,11 @@ app = Flask(__name__)
 # ---------------------- Declare Variables ----------------------
 running_ip =[] # store view of this replica
 this_ip = None  # store self socket address
-history = []  # EX: ("key?10.10.0.3:8080:1", "mykey", "myval", "causal-metadata")
+history = []  # EX: (key?10.10.0.3:1, mykey, myval, causal-metadata)
 pending_request = []
 counter = 0
 shard_count = 0 # store external shard_count
 my_shard = 0 # store self shard id
-ping_leader = ""
-ping_watcher = ""
 
 
 # ------------------------ Error Handlers --------------------------
@@ -44,6 +42,8 @@ def bad_request(e):
         resp = jsonify(error='Key does not exist', message='Error in DELETE')
     if e is 'SHARD':
         resp = jsonify(message='Not enough nodes to provide fault-tolerance with the given shard count!')
+    if e is 'NO':
+        resp = jsonify(message='You do not have the right to access this domain')
     resp.status_code = 400
     return resp
 
@@ -66,7 +66,7 @@ def check_view_list():
     # check if SHARD_COUNT is provided
     if os.environ.get('SHARD_COUNT') is not None:
         shard_count = int(os.environ.get('SHARD_COUNT'))
-        if shard_count * 2 <= len(running_ip):
+        if ((shard_count*2) <= (len(running_ip))):
             # assign shard id to node using position mod shard_count
             my_shard = ((running_ip.index(this_ip) + 1) % shard_count) + 1
 
@@ -75,14 +75,16 @@ def check_view_list():
     # do a PUT broadcast to every other running ip in it's view
     def view_put_broadcast():
         for ip in running_ip:
-            if ip is not this_ip:
+            if ip != this_ip:
                 try:
                     socket_add = {'socket-address': this_ip}
                     resp = requests.request(
                         method='PUT',
                         url='http://' + str(ip) + '/key-value-store-view',
                         json=socket_add
-                    )  
+                    )
+                    response = Response(resp.content, resp.status_code)
+                    
                 except (requests.Timeout, requests.exceptions.RequestException) as e:
                     print("cannot send put view request to a bad ip")
                     
@@ -96,41 +98,39 @@ def check_view_list():
         random_ip = None
 
         # do not retrive history if shard id is unkown
-        if my_shard!=0:
+        if my_shard == 0:
+            print('Do not retrive history')
+
+        else:
             for ip in running_ip:
                 if ip is not this_ip:
                     try:
-                        rand = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                        rand = requests.request(
+                            method = 'GET',
+                            url = 'http://' + str(ip) + '/key-value-store-shard/node-shard-id'
+                        )
                         result_id = int(rand.json().get('shard-id'))
                     except (requests.Timeout, requests.exceptions.RequestException) as e:
-                        pass
+                        print('retrive history node-shard-id error')
                     else:
                         if result_id == my_shard:
                             random_ip = ip
                             break
+
+            print("random_ip" + str(random_ip))
             try:
-                resp = requests.get('http://' + str(random_ip) + '/history')
+                resp = requests.request(
+                    method='GET',
+                    url='http://' + str(random_ip) + '/history'
+                )
                 history = resp.json().get('history')
             except (requests.Timeout, requests.exceptions.RequestException) as e:
-                pass
+                print("error")
+
     return app
 
 app = check_view_list()
 executor = Executor(app)
-
-@app.before_first_request 
-def ping_all_nodes() -> None:
-    while True:
-        print("In ping")
-        for ip in running_ip:
-            if ip==this_ip:
-                continue
-            try:
-                resp = requests.get('http://' + str(ip) + '/ping')
-            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                running_ip.remove(ip)
-        
-        time.sleep(5)
 
 
 # ------------------------- SHARD OPERATIONS -------------------------------------
@@ -155,15 +155,18 @@ def shard_members(shard_id):
 
     # check shard_id of all nodes
     for ip in running_ip:
-        if ip is this_ip:
+        if ip is not this_ip:
             try:
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                resp = requests.request(
+                    method = 'GET',
+                    url = 'http://' + str(ip) + '/key-value-store-shard/node-shard-id',
+                )
                 result = int(resp.json().get('shard-id'))
             except (requests.Timeout, requests.exceptions.RequestException) as e:
-                pass
+                print('shard-id-members error')
             if result == shard_id:
                 members.append(ip)
-        else:
+        elif ip is this_ip:
             if my_shard == shard_id:
                 members.append(ip)
 
@@ -189,16 +192,22 @@ def shard_id_key_count(shard_id):
 
     else:
         for ip in running_ip:
-            if ip is this_ip:
+            if ip is not this_ip:
                 try:
-                    resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                    resp = requests.request(
+                        method = 'GET',
+                        url = 'http://' + str(ip) + '/key-value-store-shard/node-shard-id'
+                    )
                     result = int(resp.json().get('shard-id'))
                 except (requests.Timeout, requests.exceptions.RequestException) as e:
-                    pass
+                    print('shard-id-members error')
                 if result == int(shard_id):
                     forward_ip = ip
                     break
-        forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forward_ip) + '/'))
+        forw = requests.request(
+            method = 'GET',
+            url = request.url.replace(request.host_url, 'http://' + str(forward_ip) + '/')
+        )
         return Response(forw.content, forw.status_code)
 
 # add a node to a shard
@@ -215,7 +224,7 @@ def add_member(shard_id):
     new_add = result['socket-address']
 
     # check if we are in new node
-    if new_add is this_ip:
+    if new_add == this_ip:
         # assign shard id
         my_shard = shard_id
         # get shard count data from a random ip
@@ -224,11 +233,14 @@ def add_member(shard_id):
                 random_ip = ip
                 break
         try:
-            resp = requests.get('http://' + str(random_ip) + '/key-value-store-shard/shard-ids')
+            resp = requests.request(
+                method = 'GET',
+                url = 'http://' + str(random_ip) + '/key-value-store-shard/shard-ids'
+            )
             shard_ids = resp.json().get('shard-ids').split(',')
             shard_count = int(shard_ids[-1])
         except (requests.Timeout, requests.exceptions.RequestException) as e:
-            pass
+            print("Error in add member get shard count")
 
         # retrive history and return message
         return return_add_member(shard_id)
@@ -255,11 +267,13 @@ def reshard_keys():
     if len(running_ip)  < reshard_number * 2:
         return bad_request('SHARD')
     elif reshard_number == shard_count:
-        resp = jsonify(message='This is the original shard number, no actions to be done') 
+        resp = jsonify(message='Client, this is not a new shard count : ) Shy shy shy Fancy woo') 
         resp.status_code = 200
         return resp 
+    
     # run the reshard process concurrently in the background task queue
     executor.submit(reshard, reshard_number) 
+
     # return response cuz the client is waitingggg
     time.sleep(2)
     resp = jsonify(message='Resharding done successfully')
@@ -272,11 +286,13 @@ def reshard_keys_from_replica():
     global history 
     global my_shard
     global shard_count
+    print("herroooo1")
     request_source = request.remote_addr + ":8080"
     # security check, if this request is not from another node, it can be dangerous 
     if request_source not in running_ip:
-        abort(401)
+        return bad_request('NO') 
     
+    print("herroooo2")
     # get a bunch of data
     result = request.get_json(force=True)
     new_history = result['new_history']
@@ -328,7 +344,10 @@ def return_add_member(shard_id):
     for ip in running_ip:
         if ip is not this_ip:
             try:
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                resp = requests.request(
+                    method = 'GET',
+                    url = 'http://' + str(ip) + '/key-value-store-shard/node-shard-id'
+                )
                 node_shard_id = int(resp.json().get('shard-id'))
                 if node_shard_id == shard_id:
                     get_add = ip
@@ -338,7 +357,10 @@ def return_add_member(shard_id):
     
     # retrive history data from this node
     try:
-        resp = requests.get('http://' + str(get_add) + '/history')
+        resp = requests.request(
+            method = 'GET',
+            url = 'http://' + str(get_add) + '/history'
+        )
         history = resp.json().get('history')
     except (requests.Timeout, requests.exceptions.RequestException) as e:
         print('error in return add member retrive history')
@@ -357,24 +379,38 @@ def reshard(reshard_number):
     global this_ip
     # initialize a list for all kvs across shards, with its own list of shard history as default
     all_kvs = history 
+    print("all_kvs", all_kvs)
     # initialize a list for all shard ids, also has its own id as default
     all_ids = [my_shard] 
+    print("I'm inside resharddddd")
     # search through all the nodes
+    print('running_ip', running_ip)
     for ip in running_ip:
-        if this_ip is not ip:
+        print("in reshard" , ip)
+        if this_ip != ip:
             # get the shard id of this ip 
             try: 
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                resp = requests.request(
+                        method='GET',
+                        url='http://' + str(ip) + '/key-value-store-shard/node-shard-id'
+                    )
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 print('reshard error')
             else:
                 this_shard_id = int(resp.json().get('shard-id'))
+                print("this_shard_id", this_shard_id)
                 if this_shard_id not in all_ids:
                     all_ids.append(this_shard_id)
                     try:
-                        resp = requests.get('http://' + str(ip) + '/history')
+                        resp = requests.request(
+                            method='GET',
+                            url='http://' + str(ip) + '/history'
+                        )
+
                         history_from_ip = resp.json().get('history') 
+
                         all_kvs = all_kvs + history_from_ip
+
                         if len(all_ids) == shard_count:
                             break
                     except (requests.exceptions.RequestException) as e:
@@ -382,14 +418,20 @@ def reshard(reshard_number):
     # # initialize a new dict for resharding kvs
     data = {i: [] for i in range(1, reshard_number+1)} 
     for item in all_kvs:
+        print("why is it not going to this line??")
+        print("item", item)
+        print("item[1]", item[1])
         # find the key's new corresponding shard id 
         new_shard_id = ( hash_a_string(item[1]) % reshard_number) + 1
         # add the item to the dict list for it 
         data[new_shard_id].append(item)
     
+    print("here is reshard dict", data) 
+    
     count = 1
     for ip in running_ip:
         ip_new_shard_id = count
+        print("count of shard num", count)
         count = count  % reshard_number + 1 
         if ip != this_ip:
             # evenly assign new shard id for each node, to ensure each shard has at least two nodes 
@@ -404,6 +446,8 @@ def reshard(reshard_number):
                     url='http://' + str(ip) + '/key-value-store-shard/reshard_history',
                     json=forwarding_data
                 )
+                print(resp.status_code)
+                print("hey there sexy")
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 print("Request timeout in reshard")
         else:
@@ -411,7 +455,7 @@ def reshard(reshard_number):
             shard_count = reshard_number
             history = data[ip_new_shard_id] 
 
-    return 200 # success
+    return 'success'
 
 
 # -------------------------- KVS OPERATIONS -----------------------------------------
@@ -439,7 +483,7 @@ def api_kvs(key):
         result = request.get_json(force=True)
         value = result['value']
         cm = result['causal-metadata'] # EX: "key1?10.10.0.2:1,key2?10.10.0.2:2"
-        
+
         # if this is the "correct" shard, do request normal
         if new_shard_id == my_shard:
             # When the dependencies are not satisfied, wait
@@ -503,7 +547,10 @@ def api_kvs(key):
         # else, forward the request to a "correct" shard member
         else:
             forwarding_ip = kvs_first_member(new_shard_id)
-            forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/' ))
+            forw = requests.request(
+                method = request.method,
+                url=request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/' )
+            )
             return Response(forw.content, forw.status_code)
 
         value = None
@@ -572,6 +619,7 @@ def api_kvs(key):
 # return response
 def put_op_from_client(request, key, value, cm, shard_id):
     global my_shard
+    print("I'm gonna broadcast!!")
     version = generate_version()
     version = key + '?' + version
     forwarding_data = {'version': version, 'causal-metadata': cm, 'value': value}
@@ -591,6 +639,7 @@ def put_op_from_client(request, key, value, cm, shard_id):
 # function for deleting key operation from client
 # return response
 # def delete_op_from_client(request, key, result, cm, shard_id):
+#     print("I'm gonna broadcast!!")
 #     value = None
 #     version = generate_version()
 #     forwarding_data = {'version': version, 'causal-metadata': cm, 'value': value }
@@ -603,19 +652,19 @@ def put_op_from_client(request, key, value, cm, shard_id):
 #     add_element_to_history( version, key, value, updated_cm )
 #     return resp
 
-# function for put/delete operation from replica
-# return response
-# result = {'version': version, 'causal-metadata': cm, 'value': value}
-def op_from_replica(request, key, result):
-    print("this is from another replica, do not broadcast")
-    version = result['version'] # EX: "key?10.10.0.3:8083:2"
-    cm = result['causal-metadata']
-    value = result['value']
-    updated_cm = versiont if cm is '' else cm + version
-    resp = jsonify(message="Replicated successfully", version=version)
-    resp.status_code = 201
-    add_element_to_history(version, key, value, updated_cm)
-    return resp
+    # function for put/delete operation from replica
+    # return response
+    # result = {'version': version, 'causal-metadata': cm, 'value': value}
+    def op_from_replica(request, key, result):
+        print("this is from another replica, do not broadcast")
+        version = result['version'] # EX: "key?10.10.0.3:2"
+        cm = result['causal-metadata']
+        value = result['value']
+        updated_cm = versiont if cm is '' else cm + version
+        resp = jsonify(message="Replicated successfully", version=version)
+        resp.status_code = 201
+        add_element_to_history(version, key, value, updated_cm)
+        return resp
 
 # generate a new version based on current counter + this ip
 # return a unique version across replicas ex: "10.10.0.3:8080:0"
@@ -643,7 +692,10 @@ def kvs_shard_members(shard_id):
     for ip in running_ip:
         if ip is not this_ip:
             try:
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                resp = requests.request(
+                    method = 'GET',
+                    url = 'http://' + str(ip) + '/key-value-store-shard/node-shard-id',
+                )
                 result = int(resp.json().get('shard-id'))
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 print('shard-id-members error')
@@ -661,7 +713,10 @@ def kvs_first_member(shard_id):
     for ip in running_ip:
         if ip is not this_ip:
             try:
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                resp = requests.request(
+                    method = 'GET',
+                    url = 'http://' + str(ip) + '/key-value-store-shard/node-shard-id'
+                )
                 result = int(resp.json().get('shard-id'))
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 print('kvs_first_member error')
@@ -681,7 +736,6 @@ def broadcast_request(request, forwarding_data, members):
     for ip in members:
         if ip != this_ip:
             try:
-
                 resp = requests.request(
                     method=request.method,
                     url=request.url.replace(request.host_url, 'http://' + str(ip) + '/' ),
@@ -689,8 +743,23 @@ def broadcast_request(request, forwarding_data, members):
                     timeout=5
                 )
                 response = Response(resp.content, resp.status_code)
+
+            # delete not responding replicas
             except (requests.Timeout) as e:
-                pass 
+                running_ip.remove(ip)
+                # def view_delete_broadcast():
+                for ipp in running_ip:
+                    if ipp!=ip and ipp!=this_ip:
+                        socket_delete = {'socket-address': str(ip)}
+                        resp = requests.request(
+                            method='DELETE',
+                            url='http://' + str(ipp) + '/key-value-store-view',
+                            json=socket_delete
+                        )
+                        response = Response(resp.content, resp.status_code)
+                        return response.status_code
+                thread = threading.Thread(target=view_delete_broadcast)
+                thread.start()
 
 # -------------------------- END OF KVS HELPER FUNCTIONS -----------------------------------------
 
@@ -700,8 +769,7 @@ def broadcast_request(request, forwarding_data, members):
 def view():
     # GET request retrieve the view from another replica
     if request.method == 'GET':
-        if request.request_source:
-            return view_get_method()
+        return view_get_method()
 
     # DELETE reqeust delete a replica from the view
     if request.method == 'DELETE':
@@ -717,7 +785,6 @@ def view():
 
 # Helper function for GET
 def view_get_method():
-    
     view = ','.join(running_ip)
     message = jsonify(message='View retrieved successfully', view=view)
     resp = make_response(message, 200)
@@ -759,14 +826,8 @@ def get_kvs():
     resp.status_code = 200
     return resp
 
-@app.route('/ping', methods=['GET'])
-def ping():
-    return Response(status_code=200) 
-
-
 # --------------------------------- END of Retrive Data for New Replica ----------------------------------
 
 
 if __name__ == '__main__':
-    ping_all_nodes()
     app.run(debug=True, host='0.0.0.0', port=8080, threaded=True)
