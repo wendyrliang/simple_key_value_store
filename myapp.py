@@ -531,7 +531,7 @@ def api_kvs(key):
         # else, forward the request to the "correct" shard member
         else:
             forwarding_ip = kvs_first_member(new_shard_id)
-            forwarding_data = {'value': value, 'causal-matadata': cm, 'from-shard': 1}
+            forwarding_data = {'value': value, 'causal-metadata': cm, 'from-shard': 1}
             forw = requests.request(
                 method = request.method,
                 url = request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'),
