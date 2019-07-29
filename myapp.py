@@ -485,11 +485,11 @@ def api_kvs(key):
         cm = result['causal-metadata'] # EX: "key1?10.10.0.2:1,key2?10.10.0.2:2"
 
         # if this is the "correct" shard, do request normal
-        if new_shard_id == int(my_shard):
+        if new_shard_id == my_shard:
             # When the dependencies are not satisfied, wait
             # Flask can process request concurrently by default
             # Need to check for causal consistency if there are causal-metadata passed in
-            if cm != "":
+            if cm:
                 cm_list = cm.split(',') # EX: [key1?10.10.0.2:1, key2?10.10.0.2:2]
                 # loop through causal metadata
                 for item in cm_list:
