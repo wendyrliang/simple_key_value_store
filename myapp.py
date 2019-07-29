@@ -57,10 +57,17 @@ def check_view_list():
     global history
     global shard_count
     global my_shard
+    global ping_leader
+    global ping_watcher
 
     # get external view and socket_address data
     running_ip = os.environ.get('VIEW').split(',') # a list of string of running ip, including itself
     this_ip = str(os.environ.get('SOCKET_ADDRESS')) # get self ip address
+    if len(running_ip) > 1:
+        ping_leader = running_ip[0] 
+        ping_watcher = running_ip[1] 
+
+
 
     # get external shard count
     # check if SHARD_COUNT is provided
@@ -118,19 +125,47 @@ def check_view_list():
 app = check_view_list()
 executor = Executor(app)
 
-@app.before_first_request 
+
+@app.before_first_request
+def start_ping():
+    if this_ip == ping_leader:
+        executor.submit(ping_all_nodes) 
+    elif this_ip == ping_watcher:
+        executor.submit(ping_the_leader, ping_leader)
+    else:
+        pass 
+
 def ping_all_nodes() -> None:
+    time.sleep(15)
     while True:
-        print("In ping")
         for ip in running_ip:
             if ip==this_ip:
                 continue
             try:
                 resp = requests.get('http://' + str(ip) + '/ping')
             except (requests.Timeout, requests.exceptions.RequestException) as e:
-                running_ip.remove(ip)
+                running_ip.remove(ip) 
+                for good_ip in running_ip:
+                    try:
+                        bad_ip = ip 
+                        ip_to_remove = {'socket_address': bad_ip}
+                        res = requests.delete('http://' + str(good_ip) + '/key-value-store-view', ip_to_remove) 
+                    except (requests.Timeout, requests.exceptions.RequestException) as e:
+                        pass 
         
         time.sleep(5)
+
+def ping_the_leader(leader_ip):
+    time.sleep(15) 
+    while True:
+        try:
+            resp = requests.get('http://' + str(leader_ip) + '/ping')
+        except (requests.Timeout, requests.exceptions.RequestException) as e:
+            running_ip.remove(leader_ip)
+            leader_ip = this_ip 
+        
+        time.sleep(5)
+
 
 
 # ------------------------- SHARD OPERATIONS -------------------------------------
@@ -761,7 +796,9 @@ def get_kvs():
 
 @app.route('/ping', methods=['GET'])
 def ping():
-    return Response(status_code=200) 
+    node_num = int(this_ip[-1])-1  
+    m = jsonify('Node' + str(node_num) + 'is responsive') 
+    return make_response(m, 200) 
 
 
 # --------------------------------- END of Retrive Data for New Replica ----------------------------------
