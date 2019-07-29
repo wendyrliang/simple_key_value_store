@@ -118,6 +118,20 @@ def check_view_list():
 app = check_view_list()
 executor = Executor(app)
 
+@app.before_first_request 
+def ping_all_nodes() -> None:
+    while True:
+        print("In ping")
+        for ip in running_ip:
+            if ip==this_ip:
+                continue
+            try:
+                resp = requests.get('http://' + str(ip) + '/ping')
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                running_ip.remove(ip)
+        
+        time.sleep(5)
+
 
 # ------------------------- SHARD OPERATIONS -------------------------------------
 # return all shard ids of the store
@@ -768,18 +782,7 @@ def ping():
 
 
 # --------------------------------- END of Retrive Data for New Replica ----------------------------------
-@app.before_first_request 
-def ping_all_nodes() -> None:
-    while True:
-        for ip in running_ip:
-            if ip==this_ip:
-                continue
-            try:
-                resp = requests.get('http://' + str(ip) + '/ping')
-            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                running_ip.remove(ip)
-        
-        time.sleep(5)
+
 
 if __name__ == '__main__':
     ping_all_nodes()
