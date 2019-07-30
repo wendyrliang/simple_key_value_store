@@ -190,7 +190,7 @@ def shard_members(shard_id):
 
     # check shard_id of all nodes
     for ip in running_ip:
-        if ip is this_ip:
+        if ip is not this_ip:
             try:
                 resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
                 result = int(resp.json().get('shard-id'))
@@ -224,7 +224,7 @@ def shard_id_key_count(shard_id):
 
     else:
         for ip in running_ip:
-            if ip is this_ip:
+            if ip is not this_ip:
                 try:
                     resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
                     result = int(resp.json().get('shard-id'))

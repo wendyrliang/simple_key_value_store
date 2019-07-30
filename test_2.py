@@ -64,7 +64,7 @@ class TestHW3(unittest.TestCase):
 
     shardIdList = []
     shardsMemberList = []
-    keyCount = 100
+    keyCount = 20
 
     ######################## Build docker image and create subnet ################################
     print("###################### Building Docker Image ######################\n")
