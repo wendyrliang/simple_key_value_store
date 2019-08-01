@@ -1,6 +1,7 @@
-# myapp.py
-# CS 128 Assignment 4
-# Sharded, Fault Tolerant Key-Value store by replication that provides causal consistency
+"""myapp.py
+----------------------
+Built on top of CMPS 128 Assignments
+A Sharded, Fault Tolerant Key-Value store by replication that provides causal consistency"""
 from flask import Flask, request, jsonify, make_response, Response
 from flask_executor import Executor
 import asyncio
@@ -10,6 +11,7 @@ import requests
 import threading
 import random
 import hashlib
+
 app = Flask(__name__)
 
 
@@ -23,6 +25,7 @@ shard_count = 0 # store external shard_count
 my_shard = 0 # store self shard id
 ping_leader = ""
 ping_watcher = ""
+
 
 
 # ------------------------ Error Handlers --------------------------
@@ -65,7 +68,7 @@ def check_view_list():
     this_ip = str(os.environ.get('SOCKET_ADDRESS')) # get self ip address
     if len(running_ip) > 1:
         ping_leader = running_ip[0] 
-        ping_watcher = running_ip[1] 
+        ping_watcher = running_ip[-1] 
 
 
 
@@ -125,48 +128,119 @@ def check_view_list():
 app = check_view_list()
 executor = Executor(app)
 
-
+############################################ VIEW PINGING MECHANICS #############################################
+# this function is called before the first request is made 
 @app.before_first_request
-def start_ping():
-    if this_ip == ping_leader:
-        executor.submit(ping_all_nodes) 
-    elif this_ip == ping_watcher:
-        executor.submit(ping_the_leader, ping_leader)
-    else:
-        pass 
+def call_ping_subroutine():
+    # subroutine called to check other nodes' availability 
+    executor.submit(start_pinging)  
 
-def ping_all_nodes() -> None:
+
+# if this node is the leader, ping all the nodes; if the node is the watcher, ping only the leader; otherwise, pass 
+# the check is called every 5 seconds, with a 15 second delay at the beginning 
+def start_pinging() -> None:
     time.sleep(15)
     while True:
-        for ip in running_ip:
-            if ip==this_ip:
-                continue
-            try:
-                resp = requests.get('http://' + str(ip) + '/ping')
-            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                running_ip.remove(ip) 
-                for good_ip in running_ip:
-                    try:
-                        bad_ip = ip 
-                        ip_to_remove = {'socket_address': bad_ip}
-                        res = requests.delete('http://' + str(good_ip) + '/key-value-store-view', ip_to_remove) 
-                    except (requests.Timeout, requests.exceptions.RequestException) as e:
-                        pass 
+        if this_ip == ping_leader:
+            ping_all_nodes()
+        elif this_ip == ping_watcher:
+            ping_the_leader() 
+        else:
+            pass
         
-        time.sleep(5)
+        time.sleep(5) 
 
-def ping_the_leader(leader_ip):
-    time.sleep(15) 
-    while True:
+# as the leader, ping all the nodes, including the watcher
+def ping_all_nodes() -> None:
+    global ping_watcher
+    for ip in running_ip:
+        if ip == this_ip:
+            continue
         try:
-            resp = requests.get('http://' + str(leader_ip) + '/ping')
+            # allow a maximum 2 seconds of response time 
+            resp = requests.get('http://' + str(ip) + '/ping', timeout=2)
         except (requests.Timeout, requests.exceptions.RequestException) as e:
-            running_ip.remove(leader_ip)
-            leader_ip = this_ip 
+            # remove irresponsive node from its own view list
+            running_ip.remove(ip)   
+            # if the ping watcher is down, assign new ping watcher randomly 
+            if ip == ping_watcher:
+                ping_watcher = running_ip[-1] if running_ip[-1]!= this_ip else running_ip[-2] 
+                # send a put request to tell the new ping watcher about its new role 
+                res = requests.put('http://' + str(ping_watcher) + '/new-watcher')
+
+            # send delete broadcast to delete the irresponsive node from others' view list  
+            for good_ip in running_ip:
+                if good_ip == this_ip:
+                    continue 
+                try:
+                    bad_ip = ip 
+                    ip_to_remove = {'socket-address': bad_ip}
+                    res = requests.delete('http://' + str(good_ip) + '/key-value-store-view', json=ip_to_remove) 
+                except (requests.Timeout, requests.exceptions.RequestException) as e:
+                    pass
+   
+# as the watcher, ping the leader 
+def ping_the_leader():
+    global ping_leader
+    global ping_watcher 
+    
+    try:
+        # allow a maximum 2 seconds of response time 
+        resp = requests.get('http://' + str(ping_leader) + '/ping', timeout=2) 
+    except (requests.Timeout, requests.exceptions.RequestException) as e:
+        # if the leader is irresponsive, remove leader from view list
+        running_ip.remove(ping_leader)       
+        # broadcast delete request to all remaining nodes
+        for good_ip in running_ip:
+            if good_ip == this_ip:
+                continue 
+            try:
+                ip_to_remove = {'socket-address': ping_leader}
+                res = requests.delete('http://' + str(good_ip) + '/key-value-store-view', json=ip_to_remove) 
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                pass
         
-        time.sleep(5)
+        # take the leader role from the deceased
+        # assign a new watcher  
+        ping_leader = this_ip 
+        for ip in running_ip:
+            if ip != ping_leader:
+                ping_watcher = ip 
+                break 
+        
+        # send put request to the node for its new role 
+        res = requests.put('http://' + str(ping_watcher) + '/new-watcher')   
+    
 
 
+
+"""
+
+Endpoint: /new-watcher
+---
+Methods: PUT
+Purpose: Let a node knows that it has become the new watcher 
+Access: Another node, client is unauthorized 
+
+"""
+
+@app.route('/new-watcher', methods=['PUT']) 
+def new_watcher():
+    if request.remote_addr + ":8080" not in running_ip:
+        resp = jsonify(message='You are not authorized to access this endpoint')
+        resp.statue_code = 401 
+        return resp 
+
+
+    global ping_watcher
+    global ping_leader  
+    ping_watcher = this_ip 
+    ping_leader = request.remote_addr + ":8080" 
+    resp = jsonify(message='Assign new watcher successfully')
+    resp.status_code = 200
+    return resp 
+
+############################################ VIEW PINGING END #############################################
 
 # ------------------------- SHARD OPERATIONS -------------------------------------
 # return all shard ids of the store
@@ -733,6 +807,7 @@ def broadcast_request(request, forwarding_data, members):
 # The MAIN endpoint for view operation
 @app.route('/key-value-store-view', methods=['GET', 'PUT', 'DELETE'])
 def view():
+    global ping_leader
     # GET request retrieve the view from another replica
     if request.method == 'GET':
         if request.request_source:
@@ -742,6 +817,8 @@ def view():
     if request.method == 'DELETE':
         res = request.get_json(force=True)
         delete_ip = res['socket-address']
+        if delete_ip == ping_leader:
+            ping_leader = request.remote_addr + ":8080"
         return view_delete_method(delete_ip)
 
     # PUT reqeust add a new replica to the view
@@ -805,5 +882,4 @@ def ping():
 
 
 if __name__ == '__main__':
-    ping_all_nodes()
     app.run(debug=True, host='0.0.0.0', port=8080, threaded=True)
