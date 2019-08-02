@@ -1,7 +1,11 @@
-"""myapp.py
+"""
+
+myapp.py
 ----------------------
 Built on top of CMPS 128 Assignments
-A Sharded, Fault Tolerant Key-Value store by replication that provides causal consistency"""
+A Sharded, Fault Tolerant Key-Value store by replication that provides causal consistency
+
+"""
 from flask import Flask, request, jsonify, make_response, Response
 from flask_executor import Executor
 import asyncio
@@ -11,25 +15,22 @@ import requests
 import threading
 import random
 import hashlib
-
 app = Flask(__name__)
+################################## GLOBAL VARIABLES #########################################
 
-
-# ---------------------- Declare Variables ----------------------
-running_ip =[] # store view of this replica
+running_ip = [] # store view of this replica
 this_ip = None  # store self socket address
 history = []  # EX: ("key?10.10.0.3:8080:1", "mykey", "myval", "causal-metadata")
-pending_request = []
-counter = 0
+counter = 0 # counter for version number 
 shard_count = 0 # store external shard_count
 my_shard = 0 # store self shard id
-ping_leader = ""
-ping_watcher = ""
+ping_leader = None
+ping_watcher = None 
 
+##############################################################################################
 
+################################# ERROR HANDLERS #############################################
 
-# ------------------------ Error Handlers --------------------------
-# View error for PUT and DELETE
 @app.errorhandler(404)
 def bad_view_request(e):
     if e is 'PUT':
@@ -50,11 +51,11 @@ def bad_request(e):
     resp.status_code = 400
     return resp
 
-
-# ----------------------- App Initialization -----------------------
+##############################################################################################
+####################################### APP INIT #############################################
 def check_view_list():
     app = Flask(__name__)
-    # Need to set global keyword to avoid ambiguity
+    # need to set global keyword to avoid ambiguity
     global this_ip
     global running_ip
     global history
@@ -66,12 +67,10 @@ def check_view_list():
     # get external view and socket_address data
     running_ip = os.environ.get('VIEW').split(',') # a list of string of running ip, including itself
     this_ip = str(os.environ.get('SOCKET_ADDRESS')) # get self ip address
+    # assign ping leader and ping watcher 
     if len(running_ip) > 1:
         ping_leader = running_ip[0] 
-        ping_watcher = running_ip[-1] 
-
-
-
+        ping_watcher = running_ip[-1]   
     # get external shard count
     # check if SHARD_COUNT is provided
     if os.environ.get('SHARD_COUNT') is not None:
@@ -79,54 +78,54 @@ def check_view_list():
         if shard_count * 2 <= len(running_ip):
             # assign shard id to node using position mod shard_count
             my_shard = ((running_ip.index(this_ip) + 1) % shard_count) + 1
-
-    # if SHARD_COUNT is not provided, need to add to a shard use add-member
+        else:
+            raise ValueError("not enough nodes for this shard count")
+    else:
+        pass # if SHARD_COUNT is not provided, need to add to a shard through add-member
 
     # do a PUT broadcast to every other running ip in it's view
     def view_put_broadcast():
         for ip in running_ip:
-            if ip is not this_ip:
-                try:
-                    socket_add = {'socket-address': this_ip}
-                    resp = requests.request(
-                        method='PUT',
-                        url='http://' + str(ip) + '/key-value-store-view',
-                        json=socket_add
-                    )  
-                except (requests.Timeout, requests.exceptions.RequestException) as e:
-                    print("cannot send put view request to a bad ip")
-                    
+            if ip is this_ip:
+                continue
+            socket_add = {'socket-address': this_ip}
+            try:  
+                resp = requests.put('http://' + str(ip) + '/key-value-store-view',json=socket_add)  
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                print("this IP is already in the node's view list")
 
     thread = threading.Thread(target=view_put_broadcast)
     thread.start()
 
-    # retrive all key-value pairs from one of the replicas and put them into local store
+    # retrive all key-value pairs from one of the nodes from the same shard and put them into local store
+    # TODO: is there a way to not go through these requests when the nodes haven't received any request and history is empty
     if len(running_ip) > 1:
         global history
         random_ip = None
-
         # do not retrive history if shard id is unkown
         if my_shard!=0:
             for ip in running_ip:
-                if ip is not this_ip:
-                    try:
-                        rand = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
-                        result_id = int(rand.json().get('shard-id'))
-                    except (requests.Timeout, requests.exceptions.RequestException) as e:
-                        pass
-                    else:
-                        if result_id == my_shard:
-                            random_ip = ip
-                            break
+                if ip is this_ip:
+                    continue 
+                try:
+                    rand = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                except (requests.Timeout, requests.exceptions.RequestException) as e:
+                    pass
+                else:
+                    result_id = int(rand.json().get('shard-id'))
+                    if result_id == my_shard:
+                        random_ip = ip
+                        break
             try:
-                resp = requests.get('http://' + str(random_ip) + '/history')
-                history = resp.json().get('history')
+                resp = requests.get('http://' + str(random_ip) + '/history')             
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 pass
+            else:
+                history = resp.json().get('history')
     return app
 
-app = check_view_list()
-executor = Executor(app)
+app = check_view_list() # assign the app to initialize
+executor = Executor(app) # wrap it in a coroutine executor 
 
 ############################################ VIEW PINGING MECHANICS #############################################
 # this function is called before the first request is made 
@@ -154,7 +153,7 @@ def start_pinging() -> None:
 def ping_all_nodes() -> None:
     global ping_watcher
     for ip in running_ip:
-        if ip == this_ip:
+        if ip is this_ip:
             continue
         try:
             # allow a maximum 2 seconds of response time 
@@ -163,24 +162,25 @@ def ping_all_nodes() -> None:
             # remove irresponsive node from its own view list
             running_ip.remove(ip)   
             # if the ping watcher is down, assign new ping watcher randomly 
-            if ip == ping_watcher:
+            if ip is ping_watcher:
                 ping_watcher = running_ip[-1] if running_ip[-1]!= this_ip else running_ip[-2] 
                 # send a put request to tell the new ping watcher about its new role 
                 res = requests.put('http://' + str(ping_watcher) + '/new-watcher')
 
             # send delete broadcast to delete the irresponsive node from others' view list  
             for good_ip in running_ip:
-                if good_ip == this_ip:
-                    continue 
+                if good_ip is this_ip:
+                    continue  
+                ip_to_remove = {'socket-address': ip}
                 try:
-                    bad_ip = ip 
-                    ip_to_remove = {'socket-address': bad_ip}
+                    
                     res = requests.delete('http://' + str(good_ip) + '/key-value-store-view', json=ip_to_remove) 
                 except (requests.Timeout, requests.exceptions.RequestException) as e:
                     pass
+    return None 
    
 # as the watcher, ping the leader 
-def ping_the_leader():
+def ping_the_leader() -> None:
     global ping_leader
     global ping_watcher 
     
@@ -192,38 +192,32 @@ def ping_the_leader():
         running_ip.remove(ping_leader)       
         # broadcast delete request to all remaining nodes
         for good_ip in running_ip:
-            if good_ip == this_ip:
-                continue 
-            try:
-                ip_to_remove = {'socket-address': ping_leader}
+            if good_ip is this_ip:
+                continue
+            ip_to_remove = {'socket-address': ping_leader} 
+            try:         
                 res = requests.delete('http://' + str(good_ip) + '/key-value-store-view', json=ip_to_remove) 
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 pass
-        
         # take the leader role from the deceased
-        # assign a new watcher  
         ping_leader = this_ip 
+        # assign a new watcher  
         for ip in running_ip:
             if ip != ping_leader:
                 ping_watcher = ip 
                 break 
-        
         # send put request to the node for its new role 
         res = requests.put('http://' + str(ping_watcher) + '/new-watcher')   
     
-
+    return None 
 
 
 """
-
 Endpoint: /new-watcher
----
-Methods: PUT
+URL_for: new_watcher
 Purpose: Let a node knows that it has become the new watcher 
-Access: Another node, client is unauthorized 
-
+Accessed by: Another node. Client is unauthorized 
 """
-
 @app.route('/new-watcher', methods=['PUT']) 
 def new_watcher():
     if request.remote_addr + ":8080" not in running_ip:
@@ -231,63 +225,101 @@ def new_watcher():
         resp.statue_code = 401 
         return resp 
 
-
     global ping_watcher
     global ping_leader  
     ping_watcher = this_ip 
     ping_leader = request.remote_addr + ":8080" 
-    resp = jsonify(message='Assign new watcher successfully')
+    resp = jsonify(message='New watcher is assigned')
     resp.status_code = 200
     return resp 
 
-############################################ VIEW PINGING END #############################################
+#################################################################################################
 
-# ------------------------- SHARD OPERATIONS -------------------------------------
-# return all shard ids of the store
+######################################## SHARDS OPERATIONS #############################################
+
+"""
+Endpoint: /key-value-store-shard/shard-ids
+URL_for: shard_ids
+Purpose: Get the list of active shard ids in the system  
+Accessed by: Client or any nodes  
+"""
 @app.route('/key-value-store-shard/shard-ids', methods=['GET'])
 def shard_ids():
     return return_shard_ids()
 
-# return shard id of a node
+def return_shard_ids():
+    shards = []
+    for i in range(1, (shard_count+1)):
+        shards.append(i)
+    shard_ids = ','.join([str(shard) for shard in shards])
+    message = jsonify(**{'message':'Shard IDs retrieved successfully', 'shard-ids':shard_ids})
+    resp = make_response(message, 200)
+    return resp
+
+#===========================================================================================================
+
+"""
+Endpoint: /key-value-store-shard/node-shard-id
+URL_for: node_shard_id
+Purpose: Get the list of active shard ids in the system  
+Accessed by: Client or any nodes  
+"""
 @app.route('/key-value-store-shard/node-shard-id', methods=['GET'])
 def node_shard_id():
     return return_node_shard_id()
 
-# return all members of a shard id, return list of members' socket address
+def return_node_shard_id():
+    global my_shard
+    shard_id = str(my_shard)
+    message = jsonify(**{'message':'Shard ID of the node retrieved successfully', 'shard-id':shard_id})
+    resp = make_response(message, 200)
+    return resp
+
+#===========================================================================================================
+"""
+Endpoint: /key-value-store-shard/shard-id-members/<shard_id>
+URL_for: shard_members, shard_id=? 
+Purpose: Get all members of a shard id, return list of members' socket address  
+Accessed by: Client or any nodes  
+"""
 @app.route('/key-value-store-shard/shard-id-members/<shard_id>', methods=['GET'])
 def shard_members(shard_id):
-    global running_ip
-    global my_shard
-    global this_ip
     members = []
     shard_id = int(shard_id)
-
     # check shard_id of all nodes
     for ip in running_ip:
         if ip is this_ip:
             try:
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
-                result = int(resp.json().get('shard-id'))
+                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')       
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 pass
-            if result == shard_id:
-                members.append(ip)
+            else:
+                result = int(resp.json().get('shard-id'))
+                if result == shard_id:
+                    members.append(ip)
         else:
             if my_shard == shard_id:
                 members.append(ip)
 
     return return_shard_members(members)
 
-# return number of keys stored in a shard
+def return_shard_members(members):
+    shard_id_members = ','.join(members)
+    message = jsonify(**{'message':'Members of shard ID retrieved successfully', 'shard-id-members':shard_id_members})
+    resp = make_response(message, 200)
+    return resp
+
+#===========================================================================================================
+"""
+Endpoint: /key-value-store-shard/shard-id-key-count/<shard_id>
+URL_for: shard_id_key_count, shard_id=? 
+Purpose: return number of keys stored in a shard  
+Accessed by: Client or any nodes  
+"""
 @app.route('/key-value-store-shard/shard-id-key-count/<shard_id>', methods=['GET'])
 def shard_id_key_count(shard_id):
-    global history
-    global my_shard
-    global running_ip
-    global this_ip
     key_count = []
     forward_ip = None
-
     if my_shard == int(shard_id):
         for his in history:
             if his[1] not in key_count and his[2] is not None:
@@ -310,7 +342,19 @@ def shard_id_key_count(shard_id):
         forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forward_ip) + '/'))
         return Response(forw.content, forw.status_code)
 
-# add a node to a shard
+def return_key_count(count):
+    key_count = str(count)
+    message = jsonify(**{'message':'Key count of shard ID retrieved successfully', 'shard-id-key-count':key_count})
+    resp = make_response(message, 200)
+    return resp
+
+#===========================================================================================================
+"""
+Endpoint: /key-value-store-shard/add-member/<shard_id>
+URL_for: add_member, shard_id=? 
+Purpose: Add a new member to shard   
+Accessed by: Client  
+"""
 @app.route('/key-value-store-shard/add-member/<shard_id>', methods=['PUT'])
 def add_member(shard_id):
     global this_ip
@@ -355,80 +399,6 @@ def add_member(shard_id):
         except (requests.Timeout, requests.exceptions.RequestException) as e:
             print('Error in shard add member (new node dead)')
 
-@app.route('/key-value-store-shard/reshard', methods=['PUT'])
-def reshard_keys():
-    result = request.get_json(force=True) 
-    reshard_number = int(result['shard-count']) 
-    # check if there's sufficient replica to do the requested number of shards
-    # there has to be at least two replicas in a shard
-    if len(running_ip)  < reshard_number * 2:
-        return bad_request('SHARD')
-    elif reshard_number == shard_count:
-        resp = jsonify(message='This is the original shard number, no actions to be done') 
-        resp.status_code = 200
-        return resp 
-    # run the reshard process concurrently in the background task queue
-    executor.submit(reshard, reshard_number) 
-    # return response cuz the client is waitingggg
-    time.sleep(2)
-    resp = jsonify(message='Resharding done successfully')
-    resp.status_code = 200
-    return resp
-
-# the function for overriding a node's kvs, shard id, and shard count knowledge 
-@app.route('/key-value-store-shard/reshard_history', methods=['PUT'])
-def reshard_keys_from_replica():
-    global history 
-    global my_shard
-    global shard_count
-    request_source = request.remote_addr + ":8080"
-    # security check, if this request is not from another node, it can be dangerous 
-    if request_source not in running_ip:
-        abort(401)
-    
-    # get a bunch of data
-    result = request.get_json(force=True)
-    new_history = result['new_history']
-    new_id = result['new_id']
-    new_count = result['new_count']
-    # override these data 
-    history = new_history
-    my_shard = int(new_id)
-    shard_count = int(new_count)
-    resp = jsonify(message="Successfully")
-    resp.status_code = 201
-    return resp
-
-# ----------------------------- Helper Functions for Sharding --------------------------------
-def return_shard_ids():
-    global shard_count
-    shards = []
-    for i in range(1, (shard_count+1)):
-        shards.append(i)
-    shard_ids = ','.join([str(shard) for shard in shards])
-    message = jsonify(**{'message':'Shard IDs retrieved successfully', 'shard-ids':shard_ids})
-    resp = make_response(message, 200)
-    return resp
-
-def return_node_shard_id():
-    global my_shard
-    shard_id = str(my_shard)
-    message = jsonify(**{'message':'Shard ID of the node retrieved successfully', 'shard-id':shard_id})
-    resp = make_response(message, 200)
-    return resp
-
-def return_shard_members(members):
-    shard_id_members = ','.join(members)
-    message = jsonify(**{'message':'Members of shard ID retrieved successfully', 'shard-id-members':shard_id_members})
-    resp = make_response(message, 200)
-    return resp
-
-def return_key_count(count):
-    key_count = str(count)
-    message = jsonify(**{'message':'Key count of shard ID retrieved successfully', 'shard-id-key-count':key_count})
-    resp = make_response(message, 200)
-    return resp
-
 def return_add_member(shard_id):
     global history
 
@@ -457,7 +427,58 @@ def return_add_member(shard_id):
     resp = make_response(message, 200)
     return resp
 
-# function for resharding 
+#===========================================================================================================
+"""
+Endpoint: /key-value-store-shard/reshard
+URL_for: reshard_keys
+Purpose: Reshard the store based on the given shard count    
+Accessed by: Client or any nodes  
+"""
+@app.route('/key-value-store-shard/reshard', methods=['PUT'])
+def reshard_keys():
+    result = request.get_json(force=True) 
+    reshard_number = int(result['shard-count']) 
+    # check if there's sufficient replica to do the requested number of shards
+    # there has to be at least two replicas in a shard
+    if len(running_ip)  < reshard_number * 2:
+        return bad_request('SHARD')
+    elif reshard_number == shard_count:
+        resp = jsonify(message='This is the original shard number, no actions to be done') 
+        resp.status_code = 200
+        return resp 
+    # run the reshard process concurrently in the background task queue
+    executor.submit(reshard, reshard_number) 
+    # return response cuz the client is waitingggg
+    time.sleep(2)
+    resp = jsonify(message='Resharding processed successfully')
+    resp.status_code = 200
+    return resp
+
+"""
+Endpoint: /key-value-store-shard/reshard_history
+URL_for: reshard_keys_from_replica
+Purpose: Update the node with its new history, shard id, and shard count     
+Accessed by: Other node. Client is unauthorized 
+"""
+# the function for overriding a node's kvs, shard id, and shard count knowledge 
+@app.route('/key-value-store-shard/reshard_history', methods=['PUT'])
+def reshard_keys_from_replica():
+    global history 
+    global my_shard
+    global shard_count
+    request_source = request.remote_addr + ":8080"
+    # security check, if this request is not from another node, it can be dangerous 
+    if request_source not in running_ip:
+        abort(401)
+    # get a bunch of data
+    result = request.get_json(force=True)
+    history = result['new_history']
+    my_shard = int(result['new_id'])
+    shard_count = int(result['new_count'])
+    resp = jsonify(message="Success")
+    resp.status_code = 201
+    return resp
+
 def reshard(reshard_number):
     global history 
     global shard_count
@@ -522,8 +543,9 @@ def reshard(reshard_number):
 
     return 200 # success
 
+#===========================================================================================================
 
-# -------------------------- KVS OPERATIONS -----------------------------------------
+######################################## KVS OPERATIONS #############################################
 # The MAIN endpoint for key value store operation
 @app.route('/key-value-store/<key>', methods=['PUT', 'GET', 'DELETE'])
 def api_kvs(key):
