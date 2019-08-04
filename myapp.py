@@ -593,19 +593,21 @@ def api_kvs(key):
                     # else, need to check the "correct" shard id
                     else:
                         forwarding_ip = kvs_first_member(cm_shard)
-                        resp = requests.request(
-                            method = 'GET',
-                            url = 'http://' + str(forwarding_ip) + '/history'
-                        )
-                        forward_history = resp.json().get('history')
+                        try:
+                            resp = requests.get('http://' + str(forwarding_ip) + '/history')
+                        except (requests.Timeout, requests.exceptions.RequestException) as e:
+                            return Response(status=404)
+                        else:
+                            forward_history = resp.json().get('history')
                         while item not in [his[0] for his in forward_history]:
                             time.sleep(1)
                             forwarding_ip = kvs_first_member(cm_shard)
-                            resp = requests.request(
-                                method = 'GET',
-                                url = 'http://' + str(forwarding_ip) + '/history'
-                            )
-                            forward_history = resp.json().get('history')
+                            try:
+                                resp = requests.get('http://' + str(forwarding_ip) + '/history')
+                            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                                return Response(status=404)
+                            else:
+                                forward_history = resp.json().get('history')
                         
             # if request from client
             if request_source not in running_ip:
@@ -621,12 +623,12 @@ def api_kvs(key):
         else:
             forwarding_ip = kvs_first_member(new_shard_id)
             forwarding_data = {'value': value, 'causal-metadata': cm, 'from-shard': 1}
-            forw = requests.request(
-                method = request.method,
-                url = request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'),
-                json = forwarding_data
-            )
-            return Response(forw.content, forw.status_code)
+            try:
+                forw = requests.put(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'), json = forwarding_data)
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                return Response(status=404)
+            else:    
+                return Response(forw.content, forw.status_code)
 
     # DELETE request delete the corresponding key-value pair
     if request.method == 'DELETE':
@@ -651,19 +653,21 @@ def api_kvs(key):
                             time.sleep(1)
                     else:
                         forwarding_ip = kvs_first_member(cm_shard)
-                        resp = requests.reqeust(
-                            method = 'GET',
-                            url = 'http://' + str(forwarding_ip) + '/history'
-                        )
-                        forward_history = resp.json().get('history')
+                        try:
+                            resp = requests.get('http://' + str(forwarding_ip) + '/history')
+                        except (requests.Timeout, requests.exceptions.RequestException) as e:
+                            return Response(status=404)
+                        else:
+                            forward_history = resp.json().get('history')
                         while item not in [his[0] for his in forward_history]:
                             time.sleep(1)
                             forwarding_ip = kvs_first_member(cm_shard)
-                            resp = requests.reqeust(
-                                method = 'GET',
-                                url = 'http://' + str(forwarding_ip) + '/history'
-                            )
-                            forward_history = resp.json().get('history')
+                            try:
+                                resp = requests.get('http://' + str(forwarding_ip) + '/history')
+                            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                                return Response(status=404)
+                            else:
+                                forward_history = resp.json().get('history')
 
             # loop through history to find the latest value of the key
             for item in history:
@@ -687,12 +691,12 @@ def api_kvs(key):
         else:
             forwarding_ip = kvs_first_member(new_shard_id)
             forwarding_data = {'causal-metadata': cm, 'from-shard': 1}
-            forw = requests.request(
-                method = request.method,
-                url = request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'),
-                json = forwarding_data
-            )
-            return Response(forw.content, forw.status_code)
+            try:
+                forw = requests.delete(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'), json = forwarding_data)
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                return Response(status=404)
+            else:
+                return Response(forw.content, forw.status_code)
 
     # GET request return the corresponding value of the key
     if request.method == 'GET':

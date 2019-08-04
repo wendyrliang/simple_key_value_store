@@ -1,1 +1,1 @@
-curl --request DELETE --header "Content-Type: application/json" --write-out "%{http_code}\n" --data '{"causal-metadata": "key1?10.10.0.3:8080:0"}' http://localhost:8084/key-value-store/key1
+curl --request DELETE --header "Content-Type: application/json" --write-out "%{http_code}\n" --data '{"causal-metadata": "key1?10.10.0.3:8080:0"}' http://localhost:8082/key-value-store/key1
