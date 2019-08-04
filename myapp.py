@@ -153,7 +153,7 @@ def start_pinging() -> None:
 def ping_all_nodes() -> None:
     global ping_watcher
     for ip in running_ip:
-        if ip is this_ip:
+        if ip == this_ip:
             continue
         try:
             # allow a maximum 2 seconds of response time 
@@ -449,7 +449,7 @@ def reshard_keys():
     # run the reshard process concurrently in the background task queue
     executor.submit(reshard, reshard_number) 
     # return response cuz the client is waitingggg
-    time.sleep(2)
+    time.sleep(3)
     resp = jsonify(message='Resharding processed successfully')
     resp.status_code = 200
     return resp
@@ -479,7 +479,7 @@ def reshard_keys_from_replica():
     resp.status_code = 201
     return resp
 
-def reshard(reshard_number):
+def reshard(reshard_number) -> None:
     global history 
     global shard_count
     global my_shard
@@ -496,19 +496,21 @@ def reshard(reshard_number):
             try: 
                 resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
             except (requests.Timeout, requests.exceptions.RequestException) as e:
-                print('reshard error')
+                pass
             else:
                 this_shard_id = int(resp.json().get('shard-id'))
                 if this_shard_id not in all_ids:
                     all_ids.append(this_shard_id)
                     try:
                         resp = requests.get('http://' + str(ip) + '/history')
+                    except (requests.exceptions.RequestException) as e:
+                        pass
+                    else:
                         history_from_ip = resp.json().get('history') 
                         all_kvs = all_kvs + history_from_ip
                         if len(all_ids) == shard_count:
                             break
-                    except (requests.exceptions.RequestException) as e:
-                        print("Get history timeout in reshard")
+
     # # initialize a new dict for resharding kvs
     data = {i: [] for i in range(1, reshard_number+1)} 
     for item in all_kvs:
@@ -529,24 +531,25 @@ def reshard(reshard_number):
                                'new_count': str(reshard_number)} 
             # send request to this ip to put the new history, shard count, and shard id into it, override the old 
             try:
-                resp = requests.request(
-                    method='PUT',
-                    url='http://' + str(ip) + '/key-value-store-shard/reshard_history',
-                    json=forwarding_data
-                )
+                resp = requests.put('http://' + str(ip) + '/key-value-store-shard/reshard_history', json=forwarding_data)
             except (requests.Timeout, requests.exceptions.RequestException) as e:
-                print("Request timeout in reshard")
+                pass
         else:
             my_shard = ip_new_shard_id
             shard_count = reshard_number
             history = data[ip_new_shard_id] 
 
-    return 200 # success
+    return None # success
 
 #===========================================================================================================
 
 ######################################## KVS OPERATIONS #############################################
-# The MAIN endpoint for key value store operation
+"""
+Endpoint: /key-value-store/<key>
+URL_for: reshard_keys_from_replica
+Purpose: 1) Get the value of the key 2) Assign the key a value 3) delete a key     
+Accessed by: Client or any nodes  
+"""
 @app.route('/key-value-store/<key>', methods=['PUT', 'GET', 'DELETE'])
 def api_kvs(key):
     global counter
@@ -557,9 +560,8 @@ def api_kvs(key):
 
     #--------------------------key hashing-------------------------------------------
     new_shard_id = hash_a_string(key) % shard_count + 1 
-    
-    print("This is hash of key", hash_a_string(key))
-    print("From node", this_ip)
+    # print("This is hash of key", hash_a_string(key))
+    # print("From node", this_ip)
     #-----------------------end key hashing--------------------------------------------
 
     # PUT request add or update key
@@ -630,12 +632,16 @@ def api_kvs(key):
     if request.method == 'GET':
         # check if this is the "correct" shard
         if new_shard_id == my_shard:
-            print("goAhead")
+            pass
         # else, forward the request to a "correct" shard member
         else:
             forwarding_ip = kvs_first_member(new_shard_id)
-            forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/' ))
-            return Response(forw.content, forw.status_code)
+            try:
+                forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/' ), timeout=1)
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                return Response(status=404) 
+            else:
+                return Response(forw.content, forw.status_code)
 
         value = None
         # loop through history to find the latest value of the key
@@ -896,8 +902,9 @@ def get_kvs():
 @app.route('/ping', methods=['GET'])
 def ping():
     node_num = int(this_ip[-1])-1  
-    m = jsonify('Node' + str(node_num) + 'is responsive') 
-    return make_response(m, 200) 
+    resp = jsonify('Node' + str(node_num) + 'is responsive') 
+    resp.statue_code = 200
+    return resp 
 
 
 # --------------------------------- END of Retrive Data for New Replica ----------------------------------
