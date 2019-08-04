@@ -748,7 +748,7 @@ def op_from_replica(request, key, result):
     version = result['version'] # EX: "key?10.10.0.3:8083:2"
     cm = result['causal-metadata']
     value = result['value']
-    updated_cm = versiont if cm is '' else cm + version
+    updated_cm = version if cm is '' else cm + version
     resp = jsonify(message="Replicated successfully", version=version)
     resp.status_code = 201
     add_element_to_history(version, key, value, updated_cm)
