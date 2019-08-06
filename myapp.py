@@ -233,7 +233,20 @@ def new_watcher():
     resp.status_code = 200
     return resp 
 
-#################################################################################################
+"""
+Endpoint: /ping
+URL_for: ping
+Purpose: Check if a node is alive or not x_x  
+Accessed by: Client or other nodes 
+"""
+@app.route('/ping', methods=['GET'])
+def ping():
+    node_num = int(this_ip[-1])-1  
+    resp = jsonify('Node' + str(node_num) + 'is responsive') 
+    resp.statue_code = 200
+    return resp 
+
+########################################################################################################
 
 ######################################## SHARDS OPERATIONS #############################################
 
@@ -455,6 +468,19 @@ def reshard_keys():
     return resp
 
 """
+Endpoint: /history
+URL_for: kvs_his
+Purpose: Get the kvs history from a node     
+Accessed by: Client or other node 
+"""
+@app.route('/history', methods=['GET'])
+def kvs_his():
+    resp = jsonify(message='Retreive key value store', history=history)
+    resp.status_code = 200
+    return resp
+
+
+"""
 Endpoint: /key-value-store-shard/reshard_history
 URL_for: reshard_keys_from_replica
 Purpose: Update the node with its new history, shard id, and shard count     
@@ -540,196 +566,85 @@ def reshard(reshard_number) -> None:
             history = data[ip_new_shard_id] 
 
     return None # success
-
-#===========================================================================================================
+#####################################################################################################
 
 ######################################## KVS OPERATIONS #############################################
 """
-Endpoint: /key-value-store/<key>
-URL_for: reshard_keys_from_replica
-Purpose: 1) Get the value of the key 2) Assign the key a value 3) delete a key     
+Endpoint: /key-value-store/<key>, method=PUT
+URL_for: kvs_put, key=?
+Purpose: 1) Add or update a key-value pair in the store     
 Accessed by: Client or any nodes  
 """
-@app.route('/key-value-store/<key>', methods=['PUT', 'GET', 'DELETE'])
-def api_kvs(key):
-    global counter
-    global shard_count
-    global my_shard
-    global running_ip
-    global this_ip
-
+@app.route('/key-value-store/<key>', methods=['PUT'])
+def kvs_put(key):
     #--------------------------key hashing-------------------------------------------
     new_shard_id = hash_a_string(key) % shard_count + 1 
     # print("This is hash of key", hash_a_string(key))
     # print("From node", this_ip)
     #-----------------------end key hashing--------------------------------------------
-
-    # PUT request add or update key
-    if request.method == 'PUT':
-        # get request ip, to check if it's from client
-        request_source = request.remote_addr + ":8080"
-        # ---------------------------get the data passed in-----------------------------
-        result = request.get_json(force=True)
-        value = result['value']
-        cm = result['causal-metadata'] # EX: "key1?10.10.0.2:1,key2?10.10.0.2:2"
-        
-        # if this is the "correct" shard, do request normal
-        if new_shard_id == my_shard:
-            # When the dependencies are not satisfied, wait
-            # Flask can process request concurrently by default
-            # Need to check for causal consistency if there are causal-metadata passed in
-            if cm:
-                cm_list = cm.split(',') # EX: [key1?10.10.0.2:1, key2?10.10.0.2:2]
-                # loop through causal metadata
-                for item in cm_list:
-                    cm_key = item.split('?')[0] # get key in every causal metadata
-                    cm_version = item.split('?')[1] # get version in every causal metadata
-                    cm_shard = hash_a_string(cm_key) % shard_count + 1 # calculate the shard id which the causal metadata is stored
-                    # if the causal metadata should be stored in this shard
-                    if cm_shard == my_shard:
-                        # halt until this causal metadata is in history
-                        while item not in [his[0] for his in history]:
-                            time.sleep(1)
-                    # else, need to check the "correct" shard id
-                    else:
-                        forwarding_ip = kvs_first_member(cm_shard)
-                        try:
-                            resp = requests.get('http://' + str(forwarding_ip) + '/history')
-                        except (requests.Timeout, requests.exceptions.RequestException) as e:
-                            return Response(status=404)
-                        else:
-                            forward_history = resp.json().get('history')
-                        while item not in [his[0] for his in forward_history]:
-                            time.sleep(1)
-                            forwarding_ip = kvs_first_member(cm_shard)
-                            try:
-                                resp = requests.get('http://' + str(forwarding_ip) + '/history')
-                            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                                return Response(status=404)
-                            else:
-                                forward_history = resp.json().get('history')
-                        
-            # if request from client
-            if request_source not in running_ip:
-                print("this is from client")
-                return put_op_from_client(request, key, value, cm, new_shard_id)
-            # if request id forwarded from another node
-            elif 'from-shard' in result:
-                return put_op_from_client(request, key, value, cm, new_shard_id)
-            else:
-                return op_from_replica(request, key, result)
-
-        # else, forward the request to the "correct" shard member
-        else:
-            forwarding_ip = kvs_first_member(new_shard_id)
-            forwarding_data = {'value': value, 'causal-metadata': cm, 'from-shard': 1}
-            try:
-                forw = requests.put(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'), json = forwarding_data)
-            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                return Response(status=404)
-            else:    
-                return Response(forw.content, forw.status_code)
-
-    # DELETE request delete the corresponding key-value pair
-    if request.method == 'DELETE':
-        # get request ip, to check if it's from client
-        request_source = request.remote_addr + ":8080"
-        # ---------------------------get the data passed in-----------------------------
-        result = request.get_json(force=True)
-        value = None
-        cm = result['causal-metadata']
-
-        # if this is the "correct" shard, do request normal
-        if new_shard_id == my_shard:
-            if cm:
-                cm_list = cm.split(',') # EX: [key1?10.10.0.2:1, key2?10.10.0.2:2]
-                # loop through causal metadata
-                for item in cm_list:
-                    cm_key = item.split('?')[0]
-                    cm_version = item.split('?')[1]
-                    cm_shard = hash_a_string(cm_key) % shard_count + 1
-                    if cm_shard == my_shard:
-                        while item not in [his[0] for his in history]:
-                            time.sleep(1)
-                    else:
-                        forwarding_ip = kvs_first_member(cm_shard)
-                        try:
-                            resp = requests.get('http://' + str(forwarding_ip) + '/history')
-                        except (requests.Timeout, requests.exceptions.RequestException) as e:
-                            return Response(status=404)
-                        else:
-                            forward_history = resp.json().get('history')
-                        while item not in [his[0] for his in forward_history]:
-                            time.sleep(1)
-                            forwarding_ip = kvs_first_member(cm_shard)
-                            try:
-                                resp = requests.get('http://' + str(forwarding_ip) + '/history')
-                            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                                return Response(status=404)
-                            else:
-                                forward_history = resp.json().get('history')
-
-            # loop through history to find the latest value of the key
-            for item in history:
-                if item[1] == key:
-                    value = item[2]
-
-            # if the last item that correspond to the key is not None
-            if value != None:
-                # if the request is from client
-                if request_source not in running_ip:
-                    return delete_op_from_client(request, key, cm, new_shard_id)
-                # if the request is forwarded from another node
-                elif 'from-shard' in result:
-                    return delete_op_from_client(request, key, cm, new_shard_id)
+    # get request ip, to check if it's from client
+    request_source = request.remote_addr + ":8080"
+    # ---------------------------get the data passed in-----------------------------
+    result = request.get_json(force=True)
+    value = result['value']
+    cm = result['causal-metadata'] # EX: "key1?10.10.0.2:1,key2?10.10.0.2:2"
+    
+    # if this is the "correct" shard, do request normal
+    if new_shard_id == my_shard:
+        # When the dependencies are not satisfied, wait
+        # Flask can process request concurrently by default
+        # Need to check for causal consistency if there are causal-metadata passed in
+        if cm:
+            cm_list = cm.split(',') # EX: [key1?10.10.0.2:1, key2?10.10.0.2:2]
+            # loop through causal metadata
+            for item in cm_list:
+                cm_key = item.split('?')[0] # get key in every causal metadata
+                cm_version = item.split('?')[1] # get version in every causal metadata
+                cm_shard = hash_a_string(cm_key) % shard_count + 1 # calculate the shard id which the causal metadata is stored
+                # if the causal metadata should be stored in this shard
+                if cm_shard == my_shard:
+                    # halt until this causal metadata is in history
+                    while item not in [his[0] for his in history]:
+                        time.sleep(1)
+                # else, need to check the "correct" shard id
                 else:
-                    return op_from_replica(request, key, result)
-            # if value of the key is null, return error message
-            return bad_request('DELETE')
-
-        # else, forward the request to the "correct" shard member
+                    forwarding_ip = kvs_first_member(cm_shard)
+                    try:
+                        resp = requests.get('http://' + str(forwarding_ip) + '/history')
+                    except (requests.Timeout, requests.exceptions.RequestException) as e:
+                        return Response(status=404)
+                    else:
+                        forward_history = resp.json().get('history')
+                    while item not in [his[0] for his in forward_history]:
+                        time.sleep(1)
+                        forwarding_ip = kvs_first_member(cm_shard)
+                        try:
+                            resp = requests.get('http://' + str(forwarding_ip) + '/history')
+                        except (requests.Timeout, requests.exceptions.RequestException) as e:
+                            return Response(status=404)
+                        else:
+                            forward_history = resp.json().get('history')
+                    
+        # if request from client
+        if request_source not in running_ip:
+            print("this is from client")
+            return put_op_from_client(request, key, value, cm, new_shard_id)
+        # if request id forwarded from another node
+        elif 'from-shard' in result:
+            return put_op_from_client(request, key, value, cm, new_shard_id)
         else:
-            forwarding_ip = kvs_first_member(new_shard_id)
-            forwarding_data = {'causal-metadata': cm, 'from-shard': 1}
-            try:
-                forw = requests.delete(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'), json = forwarding_data)
-            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                return Response(status=404)
-            else:
-                return Response(forw.content, forw.status_code)
+            return op_from_replica(request, key, result)
 
-    # GET request return the corresponding value of the key
-    if request.method == 'GET':
-        # check if this is the "correct" shard
-        if new_shard_id == my_shard:
-            pass
-        # else, forward the request to a "correct" shard member
-        else:
-            forwarding_ip = kvs_first_member(new_shard_id)
-            try:
-                forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/' ), timeout=1)
-            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                return Response(status=404) 
-            else:
-                return Response(forw.content, forw.status_code)
-
-        value = None
-        # loop through history to find the latest value of the key
-        for item in history:
-            if item[1] == key:
-                version = item[0]
-                value = item[2]
-                cm = item[3]
-
-        if value is not None:
-            resp = jsonify(**{'message':'Retrieved successfully', 'version':version, 'causal-metadata':cm, 'value':value})
-            resp.statue_code = 200
-            return resp
-        else:
-            return bad_request('GET')
-
-
-# -------------------------- KVS HELPER FUNCTIONS -----------------------------------------
+    # else, forward the request to the "correct" shard member
+    else:
+        forwarding_ip = kvs_first_member(new_shard_id)
+        forwarding_data = {'value': value, 'causal-metadata': cm, 'from-shard': 1}
+        try:
+            forw = requests.put(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'), json = forwarding_data)
+        except (requests.Timeout, requests.exceptions.RequestException) as e:
+            return Response(status=404)
+        else:    
+            return Response(forw.content, forw.status_code)
 
 # function for deleting put operation from client
 # return response
@@ -750,6 +665,84 @@ def put_op_from_client(request, key, value, cm, shard_id):
     add_element_to_history( version, key, value, updated_cm )
     return resp
 
+#===========================================================================================================
+
+"""
+Endpoint: /key-value-store/<key>, method=DELETE
+URL_for: kvs_del, key=?
+Purpose: 1) Delete a key-value pair in the store     
+Accessed by: Client or any nodes  
+"""
+@app.route('/key-value-store/<key>', methods=['DELETE'])
+def kvs_del(key):
+    new_shard_id = hash_a_string(key) % shard_count + 1 
+    # DELETE request delete the corresponding key-value pair
+    # get request ip, to check if it's from client
+    request_source = request.remote_addr + ":8080"
+    # ---------------------------get the data passed in-----------------------------
+    result = request.get_json(force=True)
+    value = None
+    cm = result['causal-metadata']
+
+    # if this is the "correct" shard, do request normal
+    if new_shard_id == my_shard:
+        if cm:
+            cm_list = cm.split(',') # EX: [key1?10.10.0.2:1, key2?10.10.0.2:2]
+            # loop through causal metadata
+            for item in cm_list:
+                cm_key = item.split('?')[0]
+                cm_version = item.split('?')[1]
+                cm_shard = hash_a_string(cm_key) % shard_count + 1
+                if cm_shard == my_shard:
+                    while item not in [his[0] for his in history]:
+                        time.sleep(1)
+                else:
+                    forwarding_ip = kvs_first_member(cm_shard)
+                    try:
+                        resp = requests.get('http://' + str(forwarding_ip) + '/history')
+                    except (requests.Timeout, requests.exceptions.RequestException) as e:
+                        return Response(status=404)
+                    else:
+                        forward_history = resp.json().get('history')
+                    while item not in [his[0] for his in forward_history]:
+                        time.sleep(1)
+                        forwarding_ip = kvs_first_member(cm_shard)
+                        try:
+                            resp = requests.get('http://' + str(forwarding_ip) + '/history')
+                        except (requests.Timeout, requests.exceptions.RequestException) as e:
+                            return Response(status=404)
+                        else:
+                            forward_history = resp.json().get('history')
+
+        # loop through history to find the latest value of the key
+        for item in history:
+            if item[1] == key:
+                value = item[2]
+
+        # if the last item that correspond to the key is not None
+        if value != None:
+            # if the request is from client
+            if request_source not in running_ip:
+                return delete_op_from_client(request, key, cm, new_shard_id)
+            # if the request is forwarded from another node
+            elif 'from-shard' in result:
+                return delete_op_from_client(request, key, cm, new_shard_id)
+            else:
+                return op_from_replica(request, key, result)
+        # if value of the key is null, return error message
+        return bad_request('DELETE')
+
+    # else, forward the request to the "correct" shard member
+    else:
+        forwarding_ip = kvs_first_member(new_shard_id)
+        forwarding_data = {'causal-metadata': cm, 'from-shard': 1}
+        try:
+            forw = requests.delete(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/'), json = forwarding_data)
+        except (requests.Timeout, requests.exceptions.RequestException) as e:
+            return Response(status=404)
+        else:
+            return Response(forw.content, forw.status_code)
+
 # function for deleting key operation from client
 # return response
 def delete_op_from_client(request, key, cm, shard_id):
@@ -765,10 +758,54 @@ def delete_op_from_client(request, key, cm, shard_id):
     add_element_to_history( version, key, value, updated_cm )
     return resp
 
+
+#===========================================================================================================
+
+"""
+Endpoint: /key-value-store/<key>, method=GET
+URL_for: kvs_get, key=?
+Purpose: 1) Get the value of a key in the store     
+Accessed by: Client or any nodes  
+"""
+@app.route('/key-value-store/<key>', methods=['GET'])
+def kvs_get(key):
+    # GET request return the corresponding value of the key
+    new_shard_id = hash_a_string(key) % shard_count + 1 
+    # check if this is the "correct" shard
+    if new_shard_id == my_shard:
+        pass
+    # else, forward the request to a "correct" shard member
+    else:
+        forwarding_ip = kvs_first_member(new_shard_id)
+        try:
+            forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forwarding_ip) + '/' ), timeout=1)
+        except (requests.Timeout, requests.exceptions.RequestException) as e:
+            return Response(status=404) 
+        else:
+            return Response(forw.content, forw.status_code)
+
+    value = None
+    # loop through history to find the latest value of the key
+    for item in history:
+        if item[1] == key:
+            version = item[0]
+            value = item[2]
+            cm = item[3]
+
+    if value is not None:
+        resp = jsonify(**{'message':'Retrieved successfully', 'version':version, 'causal-metadata':cm, 'value':value})
+        resp.statue_code = 200
+        return resp
+    else:
+        return bad_request('GET')
+
+############################################################################################################
+
+######################################## KVS HELPERS #######################################################
 # function for put/delete operation from replica
 # return response
 # result = {'version': version, 'causal-metadata': cm, 'value': value}
-def op_from_replica(request, key, result):
+def op_from_replica(request, key, result) -> Response:
     print("this is from another replica, do not broadcast")
     version = result['version'] # EX: "key?10.10.0.3:8083:2"
     cm = result['causal-metadata']
@@ -837,9 +874,7 @@ def kvs_first_member(shard_id) -> str:
 # braodcast request to other replicas
 # log response status code to console
 def broadcast_request(request, forwarding_data, members) -> None:
-    #-----------------------------------------------BROADCAST-------------------------------------------------------------
-    # broadcast PUT request to other replicas in shard
-    print("members", members) 
+    # broadcast request to other replicas in shard
     for ip in members:
         if ip != this_ip:
             try:
@@ -854,10 +889,19 @@ def broadcast_request(request, forwarding_data, members) -> None:
             except (requests.Timeout) as e:
                 pass 
 
-# -------------------------- END OF KVS HELPER FUNCTIONS -----------------------------------------
+# return a hash int of the key string
+def hash_a_string(st) -> int:
+    return int(hashlib.sha256(st.encode('utf-8')).hexdigest(), 16) % 10**8
 
-# -------------------------- VIEW OPERATIONS -----------------------------------------
-# The MAIN endpoint for view operation
+############################################################################################################
+
+######################################## VIEW OPERATIONS ###################################################
+"""
+Endpoint: /key-value-store-view, method=GET, PUT, DELETE
+URL_for: view
+Purpose: 1) Get, put, or delete the view of a running ip  
+Accessed by: Client or any nodes  
+"""
 @app.route('/key-value-store-view', methods=['GET', 'PUT', 'DELETE'])
 def view():
     global ping_leader
@@ -882,7 +926,6 @@ def view():
 
 # Helper function for GET
 def view_get_method():
-    
     view = ','.join(running_ip)
     message = jsonify(message='View retrieved successfully', view=view)
     resp = make_response(message, 200)
@@ -911,29 +954,10 @@ def view_put_method(new_ip):
     else:
         # PUT error
         return bad_view_request('PUT')
-# -------------------------- END OF VIEW OPERATIONS -----------------------------------------
 
-def hash_a_string(st) -> int:
-    return int(hashlib.sha256(st.encode('utf-8')).hexdigest(), 16) % 10**8
+#####################################################################################################
 
-
-
-@app.route('/history', methods=['GET'])
-def get_kvs():
-    resp = jsonify(message='Retreive key value store', history=history)
-    resp.status_code = 200
-    return resp
-
-@app.route('/ping', methods=['GET'])
-def ping():
-    node_num = int(this_ip[-1])-1  
-    resp = jsonify('Node' + str(node_num) + 'is responsive') 
-    resp.statue_code = 200
-    return resp 
-
-
-# --------------------------------- END of Retrive Data for New Replica ----------------------------------
-
-
+########################################## MAIN #####################################################
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080, threaded=True)
+#####################################################################################################
