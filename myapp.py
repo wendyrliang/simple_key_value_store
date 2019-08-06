@@ -781,7 +781,7 @@ def op_from_replica(request, key, result):
 
 # generate a new version based on current counter + this ip
 # return a unique version across replicas ex: "10.10.0.3:8080:0"
-def generate_version(key):
+def generate_version(key) -> str:
     global counter
     # generate new version
     version = str(key) + '?' + str(this_ip) + ':' + str(counter)
@@ -789,13 +789,13 @@ def generate_version(key):
     return version
 
 # create an element based on received data and add it to history
-def add_element_to_history(version, key, value, cm):
+def add_element_to_history(version, key, value, cm) -> None:
     global history
     history_element = (version, key, value, cm) # ( version, key, value, causal_metadata)
     history.append(history_element)
 
 # return a list of all members in the shard
-def kvs_shard_members(shard_id):
+def kvs_shard_members(shard_id) -> list:
     global running_ip
     global my_shard
     global this_ip
@@ -815,7 +815,7 @@ def kvs_shard_members(shard_id):
     return members
 
 # return the first member in a shard
-def kvs_first_member(shard_id):
+def kvs_first_member(shard_id) -> str:
     global running_ip
     global this_ip
     member = None
@@ -836,7 +836,7 @@ def kvs_first_member(shard_id):
 
 # braodcast request to other replicas
 # log response status code to console
-def broadcast_request(request, forwarding_data, members):
+def broadcast_request(request, forwarding_data, members) -> None:
     #-----------------------------------------------BROADCAST-------------------------------------------------------------
     # broadcast PUT request to other replicas in shard
     print("members", members) 
@@ -848,7 +848,7 @@ def broadcast_request(request, forwarding_data, members):
                     method=request.method,
                     url=request.url.replace(request.host_url, 'http://' + str(ip) + '/' ),
                     json=forwarding_data,
-                    timeout=5
+                    timeout=2
                 )
                 response = Response(resp.content, resp.status_code)
             except (requests.Timeout) as e:
@@ -913,11 +913,11 @@ def view_put_method(new_ip):
         return bad_view_request('PUT')
 # -------------------------- END OF VIEW OPERATIONS -----------------------------------------
 
-def hash_a_string(st):
+def hash_a_string(st) -> int:
     return int(hashlib.sha256(st.encode('utf-8')).hexdigest(), 16) % 10**8
 
 
-# --------------------------------- Retrive Data for New Replica ----------------------------------
+
 @app.route('/history', methods=['GET'])
 def get_kvs():
     resp = jsonify(message='Retreive key value store', history=history)
