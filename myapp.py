@@ -129,10 +129,10 @@ executor = Executor(app) # wrap it in a coroutine executor
 
 ############################################ VIEW PINGING MECHANICS #############################################
 # this function is called before the first request is made 
-@app.before_first_request
-def call_ping_subroutine():
-    # subroutine called to check other nodes' availability 
-    executor.submit(start_pinging)  
+# @app.before_first_request
+# def call_ping_subroutine():
+#     # subroutine called to check other nodes' availability 
+#     executor.submit(start_pinging)  
 
 
 # if this node is the leader, ping all the nodes; if the node is the watcher, ping only the leader; otherwise, pass 
@@ -297,17 +297,18 @@ Accessed by: Client or any nodes
 """
 @app.route('/key-value-store-shard/shard-id-members/<shard_id>', methods=['GET'])
 def shard_members(shard_id):
+    global my_shard
     members = []
     shard_id = int(shard_id)
     # check shard_id of all nodes
     for ip in running_ip:
         if ip is this_ip:
             try:
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')       
+                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                result = int(resp.json().get('shard-id'))       
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 pass
             else:
-                result = int(resp.json().get('shard-id'))
                 if result == shard_id:
                     members.append(ip)
         else:
@@ -625,13 +626,10 @@ def kvs_put(key):
                         else:
                             forward_history = resp.json().get('history')
                     
-        # if request from client
-        if request_source not in running_ip:
-            print("this is from client")
+        # if request from client or from another node or if request id forwarded from another node
+        if request_source not in running_ip or 'from-shard' in result:
             return put_op_from_client(request, key, value, cm, new_shard_id)
         # if request id forwarded from another node
-        elif 'from-shard' in result:
-            return put_op_from_client(request, key, value, cm, new_shard_id)
         else:
             return op_from_replica(request, key, result)
 
@@ -646,7 +644,7 @@ def kvs_put(key):
         else:    
             return Response(forw.content, forw.status_code)
 
-# function for deleting put operation from client
+# function for put operation from client
 # return response
 def put_op_from_client(request, key, value, cm, shard_id):
     global my_shard
@@ -907,8 +905,7 @@ def view():
     global ping_leader
     # GET request retrieve the view from another replica
     if request.method == 'GET':
-        if request.request_source:
-            return view_get_method()
+        return view_get_method()
 
     # DELETE reqeust delete a replica from the view
     if request.method == 'DELETE':
