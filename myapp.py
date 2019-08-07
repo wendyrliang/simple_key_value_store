@@ -302,17 +302,13 @@ def shard_members(shard_id):
     shard_id = int(shard_id)
     # check shard_id of all nodes
     for ip in running_ip:
-        if ip is this_ip:
-            try:
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
-                result = int(resp.json().get('shard-id'))       
-            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                pass
-            else:
-                if result == shard_id:
-                    members.append(ip)
+        try:
+            resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id') 
+        except (requests.Timeout, requests.exceptions.RequestException) as e:
+            pass
         else:
-            if my_shard == shard_id:
+            result = int(resp.json().get('shard-id'))  
+            if result == shard_id:
                 members.append(ip)
 
     return return_shard_members(members)
