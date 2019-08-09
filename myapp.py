@@ -340,16 +340,20 @@ def shard_id_key_count(shard_id):
 
     else:
         for ip in running_ip:
-            if ip is this_ip:
+            if ip is not this_ip:
                 try:
                     resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
-                    result = int(resp.json().get('shard-id'))
                 except (requests.Timeout, requests.exceptions.RequestException) as e:
                     pass
-                if result == int(shard_id):
-                    forward_ip = ip
-                    break
-        forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forward_ip) + '/'))
+                else:
+                    result = int(resp.json().get('shard-id'))
+                    if result == int(shard_id):
+                        forward_ip = ip
+                        break
+        try:
+            forw = requests.get(request.url.replace(request.host_url, 'http://' + str(forward_ip) + '/'))
+        except (requests.Timeout, requests.exceptions.RequestException) as e:
+            abort(401) 
         return Response(forw.content, forw.status_code)
 
 def return_key_count(count):
@@ -371,6 +375,7 @@ def add_member(shard_id):
     global my_shard
     global running_ip
     global shard_count
+    
     random_ip = None
 
     # get socket_address of the new node to be added to shard_id
@@ -388,10 +393,12 @@ def add_member(shard_id):
                 break
         try:
             resp = requests.get('http://' + str(random_ip) + '/key-value-store-shard/shard-ids')
-            shard_ids = resp.json().get('shard-ids').split(',')
-            shard_count = int(shard_ids[-1])
         except (requests.Timeout, requests.exceptions.RequestException) as e:
             pass
+        else:
+            shard_ids = resp.json().get('shard-ids').split(',')
+            shard_count = int(shard_ids[-1])
+
 
         # retrive history and return message
         return return_add_member(shard_id)
@@ -417,13 +424,15 @@ def return_add_member(shard_id):
     for ip in running_ip:
         if ip is not this_ip:
             try:
-                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id')
+                resp = requests.get('http://' + str(ip) + '/key-value-store-shard/node-shard-id') 
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                print('error in return add member')
+            else:
                 node_shard_id = int(resp.json().get('shard-id'))
                 if node_shard_id == shard_id:
                     get_add = ip
                     break
-            except (requests.Timeout, requests.exceptions.RequestException) as e:
-                print('error in return add member')
+
     
     # retrive history data from this node
     try:
