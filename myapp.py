@@ -376,14 +376,21 @@ def add_member(shard_id):
     global running_ip
     global shard_count
     
+    
     random_ip = None
 
     # get socket_address of the new node to be added to shard_id
-    result = request.get_json(force=True)
-    new_add = result['socket-address']
 
+    
+    result = request.get_json(force=True)
+    new_add= result['socket-address']
+
+
+
+    print(hex(id(new_add)))
+    print(hex(id(this_ip))) 
     # check if we are in new node
-    if new_add is this_ip:
+    if new_add == this_ip:
         # assign shard id
         my_shard = shard_id
         # get shard count data from a random ip
@@ -401,7 +408,10 @@ def add_member(shard_id):
 
 
         # retrive history and return message
-        return return_add_member(shard_id)
+        # return return_add_member(shard_id)
+        message = jsonify(message='Add member successfully')
+        resp = make_response(message, 200)
+        return resp 
 
     # if this is not the new node, forward request to new node
     # and return the response
@@ -418,6 +428,8 @@ def add_member(shard_id):
 
 def return_add_member(shard_id):
     global history
+    global running_ip
+    global this_ip
 
     # select a node within the same shard id
     get_add = None
@@ -429,6 +441,9 @@ def return_add_member(shard_id):
                 print('error in return add member')
             else:
                 node_shard_id = int(resp.json().get('shard-id'))
+                print("node_shard_id", node_shard_id)
+                print("shard_id", shard_id)
+                print("shard_id", type(shard_id))   
                 if node_shard_id == shard_id:
                     get_add = ip
                     break
