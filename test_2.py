@@ -454,22 +454,32 @@ class TestHW3(unittest.TestCase):
     def test_j_delete_key_value_operation(self):
         print("\n###################### Deleting keys/values from the store ######################\n")
 
+        # get the new shard IDs from node1
+        response = requests.get( 'http://localhost:8082/key-value-store-shard/shard-ids')
+        responseInJson = response.json()
+        self.assertEqual(response.status_code, 200)
+        newShardIds = responseInJson['shard-ids']
+        newShardIdList = newShardIds.split(",")
+        self.assertEqual(len(newShardIdList), 3)
+
         nextCausalMetadata = ""
 
         for counter in range(self.keyCount):
             nodeIndex = counter % len(nodeIpList)
 
             # put a new key in the store
-            response = requests.delete('http://localhost:' + nodeHostPortList[nodeIndex] + '/key-value-store/key' + str(counter), json={'value': "value" + str(counter), "causal-metadata": nextCausalMetadata})
+            response = requests.delete('http://localhost:' + nodeHostPortList[nodeIndex] + '/key-value-store/key' + str(counter), json={"causal-metadata": nextCausalMetadata})
             responseInJson = response.json()
             self.assertEqual(response.status_code, 200)
             nextCausalMetadata = responseInJson["causal-metadata"]
 
             keyShardId = responseInJson["shard-id"]
 
-            self.assertTrue(keyShardId in self.shardIdList)
+            self.assertTrue(keyShardId in newShardIdList)
 
             time.sleep(1)
+
+
 
 if __name__ == '__main__':
     unittest.main()
