@@ -36,7 +36,7 @@ def buildDockerImage():
 def runInstance(hostPort, ipAddress, subnetName, instanceName):
     command = "docker run -d -p " + hostPort + ":8080 --net=" + subnetName + " --ip=" + ipAddress + " --name=" + instanceName + " -e SOCKET_ADDRESS=" + ipAddress + ":8080" + " -e VIEW=" + view + " -e SHARD_COUNT=" + str(shardCount) + " kvs-img"
     os.system(command)
-    time.sleep(20)
+    time.sleep(2)
 
 def runAdditionalInstance(hostPort, ipAddress, subnetName, instanceName, newView):
     command = "docker run -d -p " + hostPort + ":8080 --net=" + subnetName + " --ip=" + ipAddress + " --name=" + instanceName + " -e SOCKET_ADDRESS=" + ipAddress + ":8080" + " -e VIEW=" + newView  + " kvs-img"
@@ -90,21 +90,21 @@ class TestKVS(unittest.TestCase):
 
     print("\n###################### Running Tests ######################\n")
 
+     # run instances
+    print("\n###################### Running Instances ######################\n")
+    runInstance(nodeHostPortList[0], nodeIpList[0], subnetName, "node1")
+    runInstance(nodeHostPortList[1], nodeIpList[1], subnetName, "node2")
+    runInstance(nodeHostPortList[2], nodeIpList[2], subnetName, "node3")
+    runInstance(nodeHostPortList[3], nodeIpList[3], subnetName, "node4")
+    runInstance(nodeHostPortList[4], nodeIpList[4], subnetName, "node5")
+    runInstance(nodeHostPortList[5], nodeIpList[5], subnetName, "node6")
+
+    time.sleep(10)
+
     ########################## Run tests #######################################################
 
     ########################## View tests #######################################################
     def test_a_view_operations(self):
-
-        # run instances
-        print("\n###################### Running Instances ######################\n")
-        runInstance(nodeHostPortList[0], nodeIpList[0], subnetName, "node1")
-        runInstance(nodeHostPortList[1], nodeIpList[1], subnetName, "node2")
-        runInstance(nodeHostPortList[2], nodeIpList[2], subnetName, "node3")
-        runInstance(nodeHostPortList[3], nodeIpList[3], subnetName, "node4")
-        runInstance(nodeHostPortList[4], nodeIpList[4], subnetName, "node5")
-        runInstance(nodeHostPortList[5], nodeIpList[5], subnetName, "node6")
-
-        time.sleep(10)
 
         print("\n###################### Getting the view from nodes ######################\n")
         # get the view from node1
@@ -302,4 +302,4 @@ class TestKVS(unittest.TestCase):
     
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main() 

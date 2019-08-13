@@ -129,10 +129,10 @@ executor = Executor(app) # wrap it in a coroutine executor
 
 ############################################ VIEW PINGING MECHANICS #############################################
 # this function is called before the first request is made 
-# @app.before_first_request
-# def call_ping_subroutine():
-#     # subroutine called to check other nodes' availability 
-#     executor.submit(start_pinging)  
+@app.before_first_request
+def call_ping_subroutine():
+    # subroutine called to check other nodes' availability 
+    executor.submit(start_pinging)  
 
 
 # if this node is the leader, ping all the nodes; if the node is the watcher, ping only the leader; otherwise, pass 
@@ -173,7 +173,6 @@ def ping_all_nodes() -> None:
                     continue  
                 ip_to_remove = {'socket-address': ip}
                 try:
-                    
                     res = requests.delete('http://' + str(good_ip) + '/key-value-store-view', json=ip_to_remove) 
                 except (requests.Timeout, requests.exceptions.RequestException) as e:
                     pass
