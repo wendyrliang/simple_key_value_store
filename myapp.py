@@ -69,8 +69,10 @@ def check_view_list():
     this_ip = str(os.environ.get('SOCKET_ADDRESS')) # get self ip address
     # assign ping leader and ping watcher 
     if len(running_ip) > 1:
-        ping_leader = running_ip[0] 
-        ping_watcher = running_ip[-1]   
+        if this_ip == running_ip[0]:
+            ping_leader = this_ip
+        if this_ip == running_ip[-1]:
+            ping_watcher = this_ip
     # get external shard count
     # check if SHARD_COUNT is provided
     if os.environ.get('SHARD_COUNT') is not None:
@@ -244,6 +246,88 @@ def ping():
     resp = jsonify('Node' + str(node_num) + 'is responsive') 
     resp.statue_code = 200
     return resp 
+
+"""
+Endpoint: /ping-leader
+URL_for: return_leader
+Purpose: Return ping leader address
+Accessed by: Other nodes
+"""
+@app.route('/ping-leader', methods=['GET'])
+def return_leader():
+    global ping_leader
+    
+    message = jsonify(**{'message':'Retrieve ping leader', 'ping-leader':ping_leader})
+    resp = make_response(message, 200)
+    return resp
+
+"""
+Endpoint: /ping-watcher
+URL_for: return_watcher
+Purpose: Return ping watcher address
+Accessed by: Other nodes
+"""
+@app.route('/ping-watcher', methods=['GET'])
+def return_watcher():
+    global ping_watcher
+
+    message = jsonify(**{'message':'Retrive ping watcher', 'ping-watcher':ping_watcher})
+    resp = make_response(message, 200)
+    return resp
+
+"""
+Endpoint: /ping-check
+URL_for: ping_check
+Purpose: Return ping leader and ping watcher addresses
+Accessed by: Client
+"""
+@app.route('/ping-check', methods=['GET'])
+def ping_check():
+    global running_ip
+    global this_ip
+    global ping_leader
+    global ping_watcher
+
+    if ping_leader:
+        return_leader = ping_leader
+    else:
+        for ip in running_ip:
+            if ip is this_ip:
+                continue
+            try:
+                res = requests.get('http://' + str(ip) + '/ping-leader')
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                pass
+            else:
+                return_leader = resp.json().get('ping-leader')
+                if return_leader is not None:
+                    break
+
+    if ping_watcher:
+        return_watcher = ping_watcher
+    else:
+        for ip in running_ip:
+            if ip is this_ip:
+                continue
+            try:
+                res = requests.get('http://' + str(ip) + 'ping-watcher')
+            except (requests.Timeout, requests.exceptions.RequestException) as e:
+                pass
+            else:
+                return_watcher = resp.json().get('ping-watcher')
+                if return_watcher is not None:
+                    break
+    
+    if return_leader and return_watcher:
+        message = jsonify(**{'message':'Ping leader and watcher retrieved successfully', 'ping-leader':return_leader, 'ping-watcher':return_watcher})
+        resp = make_response(message, 200)
+        return resp
+
+    else:
+        message = jsonify(**{'message':'Fail to retrieve ping leader and watcher'})
+        resp = make_response(message, 400)
+        return resp
+
 
 ########################################################################################################
 
