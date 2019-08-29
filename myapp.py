@@ -248,30 +248,20 @@ def ping():
     return resp 
 
 """
-Endpoint: /ping-leader
-URL_for: return_leader
-Purpose: Return ping leader address
+Endpoint: /ping-return
+URL_for: ping_return
+Purpose: Return ping leader or ping watcher address
 Accessed by: Other nodes
 """
-@app.route('/ping-leader', methods=['GET'])
-def return_leader():
+@app.route('/ping-return', methods=['GET'])
+def ping_return():
     global ping_leader
-    
-    message = jsonify(**{'message':'Retrieve ping leader', 'ping-leader':ping_leader})
-    resp = make_response(message, 200)
-    return resp
-
-"""
-Endpoint: /ping-watcher
-URL_for: return_watcher
-Purpose: Return ping watcher address
-Accessed by: Other nodes
-"""
-@app.route('/ping-watcher', methods=['GET'])
-def return_watcher():
     global ping_watcher
 
-    message = jsonify(**{'message':'Retrive ping watcher', 'ping-watcher':ping_watcher})
+    if ping_leader:
+        message = jsonify(**{'message':'Retrieve ping leader', 'ping-leader':ping_leader})
+    if ping_watcher:
+        message = jsonify(**{'message':'Retrieve ping watcher', 'ping-watcher':ping_watcher})
     resp = make_response(message, 200)
     return resp
 
@@ -295,11 +285,12 @@ def ping_check():
             if ip is this_ip:
                 continue
             try:
-                res = requests.get('http://' + str(ip) + '/ping-leader')
+                res = requests.get('http://' + str(ip) + '/ping-return')
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 pass
             else:
-                return_leader = resp.json().get('ping-leader')
+                if resp.json().get('ping-leader'):
+                    return_leader = resp.json().get('ping-leader')
                 if return_leader is not None:
                     break
 
@@ -310,11 +301,12 @@ def ping_check():
             if ip is this_ip:
                 continue
             try:
-                res = requests.get('http://' + str(ip) + 'ping-watcher')
+                res = requests.get('http://' + str(ip) + '/ping-return')
             except (requests.Timeout, requests.exceptions.RequestException) as e:
                 pass
             else:
-                return_watcher = resp.json().get('ping-watcher')
+                if resp.json().get('ping-watcher'):
+                    return_watcher = resp.json().get('ping-watcher')
                 if return_watcher is not None:
                     break
     
