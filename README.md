@@ -6,6 +6,8 @@ Using partitioning by hash to assign replicas with different shard id and to sto
 
 ## Development Setup
 
+In order to run the system and test, you need to have Python3 and Docker installed.
+
 To create the subnet mynet with IP range 10.10.0.0/16, execute:
 ```sh
 docker network create --subnet=10.10.0.0/16 mynet
