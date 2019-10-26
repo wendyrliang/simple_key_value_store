@@ -4,7 +4,7 @@
 This system used Docker to create an image. The distributed key-value store system implemneted the REST API.
 Using partitioning by hash to assign replicas with different shard id and to store key-value pairs in every replicas within the same shard id.
 
-## Installation
+## Development Setup
 
 To create the subnet mynet with IP range 10.10.0.0/16, execute:
 ```sh
